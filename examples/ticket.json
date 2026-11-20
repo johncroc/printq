@@ -1,0 +1,11 @@
+{
+  "title": "Cable clip, 12 mm",
+  "printer": "printer-1",
+  "model": "~/models/cable-clip-12.stl",
+  "presets": "printer-1-asa-0.2",
+  "material": "ASA",
+  "copies": 4,
+  "overrides": {"sparse_infill_density": "25%"},
+  "expect": {"layer_height": "0.2", "nozzle_temperature": "260"},
+  "notes": "Snap fit. If the spool has less than 10 m left, say so in the announcement."
+}

@@ -1,0 +1,19 @@
+[project]
+name = "printq"
+version = "0.1.0"
+description = "A print queue for Klipper printers, driven by a local LLM agent behind hard safety gates"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["anthropic>=0.80", "pydantic>=2"]
+
+[project.scripts]
+printq = "printq.cli:main"
+printq-mcp = "printq.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8"]

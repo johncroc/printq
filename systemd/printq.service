@@ -1,0 +1,12 @@
+[Unit]
+Description=printq print queue
+After=network-online.target
+
+[Service]
+ExecStart=%h/printq/.venv/bin/printq daemon
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

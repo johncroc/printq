@@ -1,0 +1,24 @@
+{
+  "printer-1": {
+    "url": "http://printer-1.local:7125",
+    "orca_datadir": "~/.config/OrcaSlicer",
+    "presets_root": "~/print-presets",
+    "start_mode": "confirm",
+    "veto_sec": 120,
+    "inspect": {
+      "mode": "raise_bed",
+      "park_xy": [202, 264],
+      "step": 10,
+      "min_z": 95,
+      "object_margin": 20,
+      "max_steps": 10,
+      "settle_sec": 2
+    }
+  },
+  "printer-2": {
+    "url": "http://printer-2.local:7125",
+    "presets_root": "~/print-presets",
+    "start_mode": "confirm",
+    "inspect": {"mode": "static"}
+  }
+}

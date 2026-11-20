@@ -1,0 +1,101 @@
+# Operations
+
+## Install
+
+```bash
+git clone https://github.com/johncroc/printq && cd printq
+uv venv && uv pip install -e .
+```
+
+printq runs on the machine that has OrcaSlicer, the model files and the Ollama server. That is normally your design workstation.
+
+## Configuration
+
+Two files, both outside the repository, in `~/.config/printq/` (override with `PRINTQ_HOME`):
+
+**`printers.json`**, from [`config/printers.example.json`](../config/printers.example.json):
+
+| Key | Meaning |
+|---|---|
+| `url` | Moonraker base URL, with port if it is not 80 |
+| `orca_datadir` | OrcaSlicer data directory for this printer, if you keep one per printer |
+| `presets_root` | Where relative `presets` names in tickets are looked up |
+| `bed_exclude_area` | Passed to the slicer as `--bed-exclude-area`; `"0x0"` removes a profile's exclusion zone |
+| `snapshot_url` | Camera snapshot URL, if the first webcam in Moonraker is not the right one |
+| `start_mode`, `veto_sec` | See [bed-check.md](bed-check.md#start-modes) |
+| `inspect` | See [bed-check.md](bed-check.md#inspect-settings) |
+
+**`env`**, from [`config/env.example`](../config/env.example), mode 600:
+
+| Variable | Meaning |
+|---|---|
+| `PRINTQ_ORCA_BIN` | OrcaSlicer executable |
+| `PRINTQ_ANTHROPIC_API_KEY` | Claude API key for the bed-check judge |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | The queue's bot and the chat it serves |
+| `PRINTQ_AGENT_MODEL` | Ollama model that drives the agent (default `gpt-oss:20b`) |
+| `PRINTQ_OLLAMA_URL` | Default `http://localhost:11434` |
+| `PRINTQ_VISION_MODEL`, `PRINTQ_SHADOW_VISION_MODEL` | See [bed-check.md](bed-check.md#the-judge) |
+| `PRINTQ_SPOOLMAN_URL` | Spoolman API base, e.g. `http://spoolman/api/v1`. Enables spool checks |
+| `PRINTQ_BED_OK_TTL` | Seconds a clear verdict stays valid (default 300) |
+
+`printq doctor` checks all of it and reports what is missing.
+
+The bed-check key is deliberately not read from `ANTHROPIC_API_KEY`: the agent harness sets the standard `ANTHROPIC_*` variables to point at the local model server, and the judge must not follow them there.
+
+## Telegram
+
+The queue needs its own bot. Telegram delivers updates to one consumer per bot, so a bot that another service already polls cannot be shared.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `env`.
+2. Start a chat with the bot (or add it to a group) and send any message.
+3. Find the chat id: `curl -s "https://api.telegram.org/bot<token>/getUpdates"` and read `message.chat.id`. Put it in `env`.
+
+Only messages from that chat are obeyed. Without a token, messages go to `$PRINTQ_DATA/notify.log` and the same commands work from the CLI.
+
+## Commands
+
+In Telegram, the id can follow an underscore so the command is one tap: `/go_j12`.
+
+| Telegram | CLI | Effect |
+|---|---|---|
+| `/queue` | `printq queue` | Active jobs and their states |
+| `/show j12` | `printq show j12` | One job: state, estimate, last reason |
+| `/hold j12` | `printq hold j12` | Keep the job from launching; also stops a veto countdown |
+| `/release j12` | `printq release j12` | Undo hold |
+| `/go j12` | `printq go j12` | You checked the bed yourself: start it. See [architecture.md](architecture.md#operator-override) |
+| `/retry j12` | `printq retry j12` | Run the step that stopped again |
+| `/drop j12` | `printq drop j12` | Remove the job |
+
+## Running as a service
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/printq.service ~/.config/systemd/user/     # adjust the path if the clone is not in ~/printq
+systemctl --user daemon-reload
+systemctl --user enable --now printq
+journalctl --user -u printq -f
+```
+
+A user service stops when you log out unless lingering is on: `loginctl enable-linger $USER`.
+
+## Commissioning a printer
+
+Do this once per printer, at the machine, before giving it `veto` or `auto`.
+
+1. Leave `start_mode` at `confirm`.
+2. With the bed clear and the printer in its normal after-print state, run `printq bedcheck <printer>` and watch. On a `raise_bed` printer the bed should come up in steps and stop when the surface is in view, with verdict `clear`. If it stops early with `cannot_tell`, read the reason: usually `min_z` is too high for the camera to see the bed, or `park_xy` does not match where your end G-code leaves the head.
+3. Put a finished part on the bed and run it again. The verdict must be `occupied`. Try a tall part and a thin flat one.
+4. Submit a real job and let it reach `awaiting_go`. Check the photo you are sent, send `/go`, and watch the start.
+5. When the verdicts have matched what you saw for a while, switch to `veto`. The dataset index (`$PRINTQ_DATA/dataset/index.jsonl`) records every verdict if you want to count.
+
+## Troubleshooting
+
+| Symptom | Look at |
+|---|---|
+| A job sits in `submitted` | `journalctl --user -u printq`; is Ollama up and the agent model pulled? `printq doctor` |
+| "Needs you: the prepare step stopped..." | `jobs/<id>/agent-prepare-*.json` holds the agent's whole run; `jobs/<id>/slice/orca.log` the slicer's |
+| Slicing fails on a setting mismatch | The message names the setting, the wanted value and the value used. Usually an override the preset set expresses differently (`"20%"` vs `"20"`) |
+| Verdict is always `cannot_tell` | `printq bedcheck <printer>` prints the reason. No API key and a dark chamber are the common ones |
+| A job stays `queued` on an idle printer | Is it held? Is an earlier job on that printer `awaiting_go` or `needs_human`? `printq queue` |
+
+`jobs/<id>/events.log` is the timeline of any job.
