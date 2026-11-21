@@ -9,8 +9,9 @@ Three possible answers, and only one of them permits a print:
 
 On printers whose bed drops out of the camera's view after a print
 (`inspect.mode: "raise_bed"`), the bed is raised in small steps with a look
-between each, and never closer to the nozzle than the last printed object's
-height plus a margin. The procedure never homes Z.
+between each, and only while the toolhead is known to be parked clear of the
+bed. A known last object keeps its top below the nozzle plane by a margin.
+The procedure never homes Z.
 
 Every frame is saved to the dataset directory with the verdicts of each
 judge, so the frames can later train a dedicated classifier
@@ -158,14 +159,20 @@ def check(cfg: dict, job_id: str = "") -> dict:
     height = moonraker.last_object_height(cfg, st["file"])
     context = _context(st["file"], height)
     insp = cfg.get("inspect", {"mode": "static"})
-    frame, steps, placed = None, 0, False
+    frame, steps, placed, assumed = None, 0, False, False
 
     def result(verdict: str, reason: str) -> dict:
+        if assumed:
+            # Z was only assumed for the relative raises. Release the motors so Klipper forgets it:
+            # nothing may later trust that number, and the next print homes properly anyway.
+            moonraker.gcode(cfg, "M84")
         return {"verdict": verdict, "reason": reason, "frame": str(frame) if frame else None, "steps": steps}
 
     while True:
-        pos = moonraker.status(cfg)["position"]
-        view, description, shot = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"]})
+        now = moonraker.status(cfg)
+        pos = now["position"]
+        view, description, shot = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"],
+                                                      "z_assumed": assumed})
         frame = shot or frame
         if view == "bed_clear":
             return result("clear", description)
@@ -175,27 +182,38 @@ def check(cfg: dict, job_id: str = "") -> dict:
             return result("cannot_tell", description)
 
         # The bed is out of view. Raise it one step, if every guard allows it.
-        if height is None:
-            return result("cannot_tell", "bed not in view and the last object's height is unknown, so not moving it")
-        floor = max(insp["min_z"], height + insp.get("object_margin", 20))
+        park, plan, z = insp["park_xy"], None, pos[2]
+        if not placed and "z" not in now["homed_axes"]:
+            # Motors were released after the last print. The bed may be raised only once the toolhead
+            # is known to be at the park position, clear of the bed.
+            if _near(pos, park):
+                plan = "tell"
+            elif "also_from_xy" in insp and _near(pos, insp["also_from_xy"]) \
+                    and "x" in now["homed_axes"] and "y" in now["homed_axes"]:
+                plan = "move"
+            elif insp.get("unknown_position") == "home_xy" and not now["homed_axes"]:
+                # Klipper restarted and knows nothing. Homing X and Y proves where the toolhead is
+                # without moving the bed towards it; Z is then assumed to be the end-of-print rest height.
+                plan, z = "home", float(insp["rest_z"])
+            else:
+                return result("cannot_tell",
+                              f"toolhead reads {pos[:2]}, not the known park position, so not moving the bed")
+        # With the toolhead off the bed nothing is above a part that rises with it, so an unknown last
+        # object is no reason to stay put; a known one still keeps its top below the nozzle plane.
+        floor = max(insp["min_z"], height + insp.get("object_margin", 20) if height is not None else 0)
         step = insp.get("step", 10)
-        if pos[2] - step < floor:
-            return result("cannot_tell", f"bed still not in view at Z={pos[2]:g}; not raising it past Z={floor:g}")
+        if z - step < floor:
+            return result("cannot_tell", f"bed still not in view at Z={z:g}; not raising it past Z={floor:g}")
         if steps >= insp.get("max_steps", 12):
             return result("cannot_tell", f"bed still not in view after {steps} raises")
-        if not placed:
-            homed = moonraker.status(cfg)["homed_axes"]
-            if "z" not in homed:
-                # Motors were released after the last print. Klipper only needs to be told where the
-                # axes already are; this is allowed only at a known resting position.
-                if not _near(pos, insp["park_xy"]):
-                    if "also_from_xy" in insp and _near(pos, insp["also_from_xy"]) and "x" in homed and "y" in homed:
-                        moonraker.gcode(cfg, f"G90\nG1 X{insp['park_xy'][0]} Y{insp['park_xy'][1]} F3000\nM400")
-                    else:
-                        return result("cannot_tell",
-                                      f"toolhead reads {pos[:2]}, not the known park position, so not moving the bed")
-                moonraker.gcode(cfg, f"SET_KINEMATIC_POSITION X={insp['park_xy'][0]} Y={insp['park_xy'][1]} Z={pos[2]}")
-            placed = True
+        if plan == "home":
+            moonraker.gcode(cfg, insp.get("home_xy_gcode", "G28 X Y"))
+            assumed = True
+        if plan in ("home", "move"):
+            moonraker.gcode(cfg, f"G90\nG1 X{park[0]} Y{park[1]} F3000\nM400")
+        if plan:
+            moonraker.gcode(cfg, f"SET_KINEMATIC_POSITION X={park[0]} Y={park[1]} Z={z}")
+        placed = True
         moonraker.gcode(cfg, f"G91\nG1 Z-{step} F600\nG90\nM400")
         steps += 1
         time.sleep(insp.get("settle_sec", 2))

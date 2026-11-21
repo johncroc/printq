@@ -39,18 +39,27 @@ On printers where the bed moves in Z, the bed sits low after a print and the cam
    - `bed_clear`: stop, verdict `clear`.
    - `unsure`: stop, verdict `cannot_tell`.
    - `bed_not_visible`: continue.
-2. Before the first move, if the motors were released after the last print, tell Klipper where the axes already are (`SET_KINEMATIC_POSITION`). This is done only when the toolhead reads as being at the configured park position. At any other position nothing moves.
+2. Before the first move, if the motors were released after the last print, establish where the toolhead is. The bed moves only once the toolhead is known to be at the park position, clear of the bed:
+   - it reads as being at `park_xy`: Klipper is told where the axes already are (`SET_KINEMATIC_POSITION`);
+   - it reads as being at `also_from_xy` with X and Y homed: it is moved to the park first;
+   - Klipper has restarted and reports nothing homed, and the printer has `"unknown_position": "home_xy"`: X and Y are homed, the toolhead is parked, and Z is *assumed* to be `rest_z`, the height your end-of-print G-code leaves the bed at. When the check ends the motors are released again (`M84`) so that nothing later trusts the assumed Z;
+   - anything else: nothing moves.
 3. Raise the bed by `step` mm and go back to 1.
+
+Why this is safe: with the toolhead parked off the bed, nothing is above a part that rises with the bed, and a bed that is out of the camera's view is far below the gantry. The camera decides when to stop, so neither the exact Z nor the height of the last part has to be known.
 
 The limits, each of which ends the procedure with `cannot_tell`:
 
 | Limit | Reason |
 |---|---|
-| Z never goes below `max(min_z, last object height + object_margin)` | The top of whatever might still be on the bed stays clear of the nozzle plane |
-| No motion at all if the last object's height is unknown | The limit above cannot be computed |
-| No motion unless the toolhead is at `park_xy` (or at `also_from_xy` with X and Y homed, from which it is first moved to the park) | Elsewhere the reported position cannot be trusted |
+| No motion unless the toolhead is proven to be at `park_xy` by one of the three routes above | Elsewhere a rising part could meet the nozzle |
+| Z never goes below `min_z`, or below the last object's height + `object_margin` when that height is known | The bed is fully in view by `min_z`; a known part keeps its top clear of the nozzle plane as well |
 | At most `max_steps` raises | A judge that never sees the bed must not keep going |
 | Z is never homed | Homing drives the bed up to the nozzle, through anything on it |
+
+An unknown last object (for example after a Klipper restart) no longer prevents the raise: the park position is what makes it safe.
+
+`unknown_position: "home_xy"` is opt-in because it relies on two things about your machine: homing X and Y must not move the bed towards the nozzle (check your `homing_override`), and the bed must rest at `rest_z` or lower after every print. `home_xy_gcode` (default `G28 X Y`) sets the command.
 
 ### `inspect` settings
 
@@ -63,7 +72,9 @@ The limits, each of which ends the procedure with `cannot_tell`:
   "min_z": 95,
   "object_margin": 20,
   "max_steps": 10,
-  "settle_sec": 2
+  "settle_sec": 2,
+  "unknown_position": "home_xy",
+  "rest_z": 170
 }
 ```
 

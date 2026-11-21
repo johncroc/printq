@@ -37,7 +37,7 @@ The interesting design question is how to let a 20-billion-parameter local model
 - **Jobs move through a fixed state machine.** Upload is impossible before a clear bed check; start is impossible before upload.
 - **The agent's report is ignored.** After each phase the daemon looks at where the job actually ended up. If that is not a state the phase may end in, you are told.
 - **The bed-clear decision is never the local model's.** It comes from a stronger vision model, and every failure of that judge (no credentials, timeout, refusal, malformed answer) counts as *cannot tell*.
-- **Moving the bed into view has hard limits** computed from the height of the last printed object, and it never homes Z.
+- **Moving the bed into view has hard limits**: only with the toolhead proven parked clear of the bed, never past a set height, and it never homes Z.
 
 [`tests/test_gates.py`](tests/test_gates.py) attacks each of these against a pretend printer.
 

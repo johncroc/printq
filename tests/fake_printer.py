@@ -69,8 +69,18 @@ class Handler(BaseHTTPRequestHandler):
             script = query["script"]
             STATE["gcode"].append(script)
             for line in script.split("\n"):
+                words = {w[0]: w[1:].lstrip("=") for w in line.split()[1:]}
                 if line.startswith("G1 Z"):  # relative move, as the bed check sends it
                     STATE["position"][2] += float(line.split()[1][1:])
+                elif line.startswith("G28"):  # X/Y homing as the bed check sends it; Z would be a bug
+                    STATE["homed"] = "".join(sorted(set(STATE["homed"]) | {a.lower() for a in "XYZ" if a in line[3:]}))
+                elif line.startswith("G1 X"):
+                    STATE["position"][:2] = [float(words["X"]), float(words["Y"])]
+                elif line.startswith("SET_KINEMATIC_POSITION"):
+                    STATE["position"] = [float(words[a]) for a in "XYZ"]
+                    STATE["homed"] = "xyz"
+                elif line.startswith("M84"):
+                    STATE["homed"] = ""
             self.reply({"result": "ok"})
         elif url.path == "/_set":
             for k, v in query.items():
