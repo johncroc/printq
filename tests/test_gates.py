@@ -11,7 +11,7 @@ import time
 import pytest
 
 import fake_printer
-from printq import bedcheck, bedlevel, config, daemon, jobs, moonraker, slicer, tools
+from printq import bedcheck, bedlevel, config, daemon, jobs, macro, moonraker, slicer, tools
 
 
 class FakeGauge:
@@ -361,3 +361,97 @@ def test_one_stalled_camera_frame_does_not_end_the_check(shop, monkeypatch):
     monkeypatch.setattr(moonraker, "_call", flaky)
     monkeypatch.setattr(moonraker, "SNAPSHOT_PAUSE", 0)
     assert moonraker.snapshot(config.printer("p1"))[:2] == b"\xff\xd8" and len(calls) == 2
+
+
+def macro_job(**fields):
+    job_id = jobs.submit({"kind": "macro", "title": "PID tune", "printer": "p1",
+                          "gcode": ["PID_CALIBRATE HEATER=extruder TARGET=260", "SAVE_CONFIG"], **fields})
+    jobs.transition("job-1", "dropped")
+    assert tools.slice_job(job_id)["sliced"] is True
+    assert tools.announce_job(job_id)["announced"] is True
+    return job_id
+
+
+def wait_for(job_id, state):
+    for _ in range(100):
+        daemon.tick()
+        if jobs.state(job_id)["state"] == state:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.fixture
+def quick_restart(monkeypatch):
+    monkeypatch.setattr(macro, "READY_POLL", 0)
+    monkeypatch.setattr(daemon.agent, "run", lambda phase, job_id: {"state": "queued", "ok": True, "text": ""})
+
+
+def test_macro_job_runs_its_commands_in_order_after_the_bed_check(shop, quick_restart):
+    job_id = macro_job()
+    assert "refused" in tools.start_job(job_id) and "refused" in tools.upload_job(job_id)
+    assert tools.check_bed(job_id)["verdict"] == "clear"
+    assert "uploaded" in tools.upload_job(job_id) and fake_printer.STATE["uploads"] == []
+    before = len(fake_printer.STATE["gcode"])
+    assert tools.start_job(job_id)["started"] is True
+    assert started() == [] and len(fake_printer.STATE["gcode"]) == before  # nothing sent by the tool itself
+    assert wait_for(job_id, "done")
+    assert fake_printer.STATE["gcode"][before:] == ["PID_CALIBRATE HEATER=extruder TARGET=260", "SAVE_CONFIG",
+                                                    "TURN_OFF_HEATERS"]
+
+
+def test_macro_job_does_not_run_on_an_occupied_bed(shop, monkeypatch):
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
+    job_id = macro_job()
+    assert tools.check_bed(job_id)["verdict"] == "occupied"
+    assert "refused" in tools.upload_job(job_id) and "refused" in tools.start_job(job_id)
+
+
+def test_macro_job_that_does_not_need_the_bed_skips_the_camera_but_not_the_idle_check(shop, monkeypatch, quick_restart):
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
+    job_id = macro_job(bed="any", heaters_off=False)
+    fake_printer.STATE["state"] = "printing"
+    assert "refused" in tools.check_bed(job_id)
+    fake_printer.STATE["state"] = "complete"
+    before = len(fake_printer.STATE["gcode"])
+    assert tools.check_bed(job_id)["verdict"] == "not_needed"
+    tools.upload_job(job_id)
+    assert tools.start_job(job_id)["started"] is True
+    assert wait_for(job_id, "done")
+    assert fake_printer.STATE["gcode"][before:] == ["PID_CALIBRATE HEATER=extruder TARGET=260", "SAVE_CONFIG"]
+
+
+def test_macro_job_stops_at_the_first_failed_command_and_turns_heaters_off(shop, quick_restart):
+    job_id = macro_job(gcode=["M140 S100", "FAIL NOW", "SAVE_CONFIG"], bed="any")
+    tools.check_bed(job_id)
+    tools.upload_job(job_id)
+    before = len(fake_printer.STATE["gcode"])
+    tools.start_job(job_id)
+    assert wait_for(job_id, "needs_human")
+    assert fake_printer.STATE["gcode"][before:] == ["M140 S100", "FAIL NOW", "TURN_OFF_HEATERS"]
+    assert "Unknown command: FAIL" in jobs.state(job_id)["reason"]
+    assert "run again" in daemon.command("retry", job_id) and jobs.state(job_id)["state"] == "queued"
+
+
+def test_macro_job_interrupted_by_a_queue_restart_is_not_run_twice(shop, quick_restart):
+    job_id = macro_job(bed="any")
+    tools.check_bed(job_id)
+    tools.upload_job(job_id)
+    tools.start_job(job_id)
+    jobs.update(job_id, macro_started=time.time())  # as a previous queue process would have left it
+    before = len(fake_printer.STATE["gcode"])
+    daemon.tick()
+    assert jobs.state(job_id)["state"] == "needs_human" and len(fake_printer.STATE["gcode"]) == before
+
+
+def test_macro_tickets_are_checked(shop):
+    base = {"kind": "macro", "title": "x", "printer": "p1"}
+    for bad, word in (({}, "missing 'gcode'"), ({"gcode": "G28"}, "list of commands"),
+                      ({"gcode": ["G28\nM84"]}, "list of commands"), ({"gcode": ["G28"], "bed": "empty"}, "'bed'"),
+                      ({"gcode": ["G28"], "copies": 3}, "does not belong"), ({"gcode": ["G28"], "kind": "magic"}, "kind")):
+        with pytest.raises(jobs.JobError, match=word):
+            jobs.validate_ticket({**base, **bad})
+    t = jobs.blank("p1", "macro")
+    assert t["_help"]["required"] == ["title", "printer", "gcode"] and "model" not in t
+    t.update(title="Home", gcode=["G28"])
+    assert jobs.validate_ticket(t)["bed"] == "clear"

@@ -23,6 +23,14 @@ def _call(url: str, data: bytes | None = None, headers: dict | None = None, time
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
+    except urllib.error.HTTPError as exc:
+        # Moonraker answers a failed command with the printer's own message; that is what the operator needs.
+        body = exc.read()[:2000]
+        try:
+            said = json.loads(body)["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            said = str(exc)
+        raise PrinterError(f"{url.split('?')[0]}: {said}") from exc
     except (urllib.error.URLError, OSError) as exc:
         raise PrinterError(f"{url.split('?')[0]}: {exc}") from exc
 
@@ -111,6 +119,17 @@ def snapshot(cfg: dict) -> bytes:
 
 def gcode(cfg: dict, script: str, timeout: float = 120) -> None:
     post(cfg, "/printer/gcode/script?script=" + urllib.parse.quote(script), timeout=timeout)
+
+
+def klipper_state(cfg: dict) -> str:
+    """'ready', 'startup', 'shutdown' or 'error'."""
+    return get(cfg, "/printer/info")["state"]
+
+
+def responses(cfg: dict, since: float) -> list[str]:
+    """What the printer has printed to its console since the given time."""
+    store = get(cfg, "/server/gcode_store?count=200")["gcode_store"]
+    return [e["message"] for e in store if e.get("type") == "response" and e.get("time", 0) >= since]
 
 
 def upload(cfg: dict, path: Path, name: str) -> str:

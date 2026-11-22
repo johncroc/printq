@@ -30,6 +30,10 @@ Approval has to be explicit and has to be for this version of the part. If the d
 
 7. **Tell the user** the job id, the printer, and what happens next: they will get the queue message with OrcaSlicer's filament and time estimate within a couple of minutes, and the print starts according to that printer's start mode once its bed is seen clear.
 
+## Macro jobs
+
+A calibration, PID tune or other printer routine can be queued the same way, with nothing to slice: `printq blank <printer> --macro`. Fill in `gcode` (one command per string) and decide `bed` with the user: `"clear"` unless the routine truly never moves over the bed. Mention in `notes` anything the operator should do first. The result arrives in the finish message as the printer's own console output.
+
 ## Afterwards
 
 `printq queue` and `printq show <id>` report progress. If the user changes their mind, `printq hold <id>` or `printq drop <id>`. If the design changes after submitting, drop the job and submit a new ticket: a queued ticket is never edited.

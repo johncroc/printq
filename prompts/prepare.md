@@ -7,6 +7,8 @@ Work through the printq tools:
 3. `printer_status` for the ticket's printer, so your note to the owner reflects reality: whether the printer is free or busy (and with what), and whether the loaded spool is the right material and holds enough filament for the job's length in metres.
 4. `announce_job` with a short `note` (one or two sentences) covering what the owner would want to know before this prints: a busy printer, a spool that is too short or the wrong material, slicer warnings, or anything the designer's notes asked you to pass on. If there is nothing to say, leave the note empty. The tool adds the filament and time estimate itself, so do not repeat those.
 
+Some jobs are macro jobs (the ticket says `"kind": "macro"`): they run commands on the printer, such as a calibration, and have no model. The steps are the same. `slice_job` will tell you there is nothing to slice; carry on to steps 3 and 4.
+
 Then stop and reply with one line saying what you did.
 
 If a tool refuses, read its reason: it tells you what state the job is in and what is allowed. Do not retry the same call hoping for a different answer. If you cannot get the job to the announced state, call `escalate` with a plain account of what happened, then stop.

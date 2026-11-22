@@ -1,0 +1,8 @@
+{
+  "kind": "macro",
+  "title": "Hotend PID tune at 260",
+  "printer": "printer-1",
+  "gcode": ["M106 S255", "PID_CALIBRATE HEATER=extruder TARGET=260", "M106 S0", "SAVE_CONFIG"],
+  "bed": "any",
+  "notes": "Part fan at print speed during the tune."
+}

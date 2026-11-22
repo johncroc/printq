@@ -5,6 +5,7 @@
 | Module | Role |
 |---|---|
 | `jobs.py` | Tickets, job directories, the state machine |
+| `macro.py` | Sends a macro job's commands once it has passed the gates |
 | `slicer.py` | Runs the OrcaSlicer CLI and verifies the G-code against the ticket |
 | `moonraker.py` | Printer status, camera frame, upload, start; Spoolman lookup |
 | `bedcheck.py` | Camera-based bed check, including moving the bed into view |

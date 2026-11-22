@@ -9,6 +9,8 @@ Starting a print onto a bed that still holds the last part crashes the machine, 
 3. `upload_job`.
 4. `start_job`. Depending on how the owner configured this printer it starts the print, starts it after a countdown the owner can veto, or waits for the owner's go-ahead. All three are a finished launch.
 
+Some jobs are macro jobs (the ticket says `"kind": "macro"`): they run commands on the printer and have no file. The steps are the same four. `check_bed` may answer `not_needed` for a job that does not care what is on the bed: treat it like `clear` and go on. `upload_job` will say there is nothing to upload: go on to `start_job`.
+
 Then stop and reply with one line saying how it ended.
 
 A refusal that says the printer is busy, the job is on hold, or the queue will try again later is normal: stop there without escalating. Escalate only when something is wrong that the owner has to act on, and say plainly what it is.

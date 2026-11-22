@@ -48,6 +48,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(STATE["frame"], ctype="image/jpeg")
         elif url.path == "/server/spoolman/spool_id":
             self.reply({"result": {"spool_id": None}})
+        elif url.path == "/printer/info":
+            self.reply({"result": {"state": "ready"}})
+        elif url.path == "/server/gcode_store":
+            self.reply({"result": {"gcode_store": [
+                {"message": "PID parameters: pid_Kp=31.4 pid_Ki=4.9 pid_Kd=49.5", "time": 4e9, "type": "response"}]}})
         elif url.path == "/_state":
             self.reply({k: v for k, v in STATE.items() if k != "frame"})
         else:
@@ -68,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/printer/gcode/script":
             script = query["script"]
             STATE["gcode"].append(script)
+            if script.startswith("FAIL"):  # stands for any command Klipper rejects
+                return self.reply({"error": {"code": 400, "message": "Unknown command: FAIL"}}, 400)
             for line in script.split("\n"):
                 words = {w[0]: w[1:].lstrip("=") for w in line.split()[1:]}
                 if line.startswith("G1 Z"):  # relative move, as the bed check sends it

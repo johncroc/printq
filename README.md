@@ -28,6 +28,8 @@ flowchart LR
 3. **Launch.** When the printer goes idle, the agent runs the bed check. A vision model looks at the printer's camera and answers *clear*, *occupied* or *cannot tell*. Only *clear* lets the job continue to upload and start.
 4. **You stay in charge.** Per printer you choose whether a clear bed starts the print at once (`auto`), starts it after a countdown you can veto from your phone (`veto`), or waits for your `/go` (`confirm`). Anything the agent cannot resolve comes to you with the bed photo attached.
 
+A ticket can also be a *macro job*: a list of commands to run on the printer (a calibration, a PID tune) that waits its turn and passes the same gates, with nothing to slice. See [docs/tickets.md](docs/tickets.md#macro-jobs).
+
 ## Why the agent is safe to run
 
 The interesting design question is how to let a 20-billion-parameter local model drive a machine that can crash itself. The answer here is that it does not get to decide anything that matters:

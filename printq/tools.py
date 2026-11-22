@@ -23,7 +23,16 @@ def _gcode_name(t: dict) -> str:
     return f"printq_{t['id']}.gcode"
 
 
+def _macro(t: dict) -> bool:
+    return t.get("kind") == "macro"
+
+
 def _summary(t: dict, report: dict) -> str:
+    if _macro(t):
+        lines = t["gcode"]
+        shown = "; ".join(lines[:4]) + (f"; and {len(lines) - 4} more" if len(lines) > 4 else "")
+        bed = "runs after the bed check" if t["bed"] == "clear" else "runs with whatever is on the bed"
+        return f"{t['title']} for {t['printer']}: macro job, {bed}\n{shown}"
     e = report["estimate"]
     return (f"{t['title']} for {t['printer']}: {e['filament_g']:.1f} g / {e['filament_mm'] / 1000:.2f} m, "
             f"{e['time']}, {e['layers']} layers, {e.get('height_mm', '?')} mm tall")
@@ -41,6 +50,10 @@ def slice_job(job_id: str) -> dict:
     if st["state"] != "submitted":
         return {"refused": f"job is '{st['state']}'; slicing happens only from 'submitted'"}
     t = jobs.ticket(job_id)
+    if _macro(t):
+        jobs.transition(job_id, "sliced", slice_report={"ok": True, "macro": True})
+        return {"sliced": True, "summary": _summary(t, {}), "next": "a macro job has nothing to slice; go on to "
+                "printer_status and announce_job"}
     if jobs.sha256(Path(t["model"])) != t["model_sha256"]:
         return {"refused": "the model file changed after the design was approved; escalate"}
     report = slicer.slice_ticket(t, jobs.job_dir(job_id) / "slice")
@@ -93,6 +106,12 @@ def check_bed(job_id: str) -> dict:
     if ahead:
         return {"refused": f"job {ahead[0]} is already being launched on {t['printer']}. {IDLE_HINT}"}
     try:
+        if _macro(t) and t["bed"] == "any":
+            if not moonraker.status(cfg)["idle"]:
+                return {"refused": f"printer is not idle. {IDLE_HINT}"}
+            jobs.transition(job_id, "bed_ok", bed={"verdict": "not_needed", "time": time.time(),
+                                                   "reason": "this job does not need a clear bed"})
+            return {"verdict": "not_needed", "reason": "this job does not need a clear bed", "next": "upload_job"}
         if st.get("vouched_until", 0) > time.time():
             if not moonraker.status(cfg)["idle"]:
                 return {"refused": f"printer is not idle. {IDLE_HINT}"}
@@ -118,6 +137,9 @@ def upload_job(job_id: str) -> dict:
     if st["state"] != "bed_ok":
         return {"refused": f"job is '{st['state']}'; upload comes after a clear bed check"}
     t = jobs.ticket(job_id)
+    if _macro(t):
+        jobs.transition(job_id, "uploaded")
+        return {"uploaded": "nothing to upload for a macro job", "next": "start_job"}
     try:
         stored = moonraker.upload(config.printer(t["printer"]), Path(st["slice_report"]["gcode"]), _gcode_name(t))
     except moonraker.PrinterError as exc:
@@ -132,15 +154,16 @@ def _start_gates(job_id: str) -> str | None:
     if st.get("held"):
         return "the operator put this job on hold"
     bed = st.get("bed") or {}
-    if bed.get("verdict") != "clear" or time.time() - bed.get("time", 0) > config.BED_OK_TTL:
-        return "the bed-clear verdict is missing or older than allowed"
     t = jobs.ticket(job_id)
+    any_bed = _macro(t) and t["bed"] == "any"
+    if not any_bed and (bed.get("verdict") != "clear" or time.time() - bed.get("time", 0) > config.BED_OK_TTL):
+        return "the bed-clear verdict is missing or older than allowed"
     cfg = config.printer(t["printer"])
     live = moonraker.status(cfg)
     if not live["idle"]:
         return f"printer is {live['state']}"
     spool = live.get("spool")
-    if isinstance(spool, dict) and t["material"] and spool["material"] and spool["material"].upper() != t["material"].upper():
+    if isinstance(spool, dict) and t.get("material") and spool["material"] and spool["material"].upper() != t["material"].upper():
         return f"loaded spool {spool['id']} is {spool['material']}, the job needs {t['material']}"
     return None
 
@@ -163,14 +186,15 @@ def start_job(job_id: str) -> dict:
         vouched = st.get("vouched_until", 0) > time.time()
         photo = (st.get("bed") or {}).get("frame")
         summary = _summary(t, st["slice_report"])
+        seen = "Bed check: clear." if (st.get("bed") or {}).get("verdict") == "clear" else "No bed check: not needed."
         if mode == "confirm" and not vouched:
-            notify.send(f"🟡 Ready [{job_id}]\n{summary}\nBed check: clear. Send /go_{job_id} to start, "
+            notify.send(f"🟡 Ready [{job_id}]\n{summary}\n{seen} Send /go_{job_id} to start, "
                         f"/hold_{job_id} to keep it.", photo)
             jobs.transition(job_id, "awaiting_go")
             return {"started": False, "waiting_for": "the operator's /go", "next": "stop here"}
         if mode == "veto" and not vouched:
             wait = int(cfg.get("veto_sec", 120))
-            notify.send(f"🟢 Starting [{job_id}] in {wait} s\n{summary}\nBed check: clear. /hold_{job_id} stops it.", photo)
+            notify.send(f"🟢 Starting [{job_id}] in {wait} s\n{summary}\n{seen} /hold_{job_id} stops it.", photo)
             deadline = time.time() + wait
             while time.time() < deadline:
                 time.sleep(2)
@@ -180,9 +204,11 @@ def start_job(job_id: str) -> dict:
             if why_not:
                 jobs.transition(job_id, "queued", reason=why_not)
                 return {"refused": f"{why_not}. The job is back in the queue. {IDLE_HINT}"}
-        moonraker.start(cfg, st["remote_file"])
+        if not _macro(t):
+            moonraker.start(cfg, st["remote_file"])
     except moonraker.PrinterError as exc:
         return {"refused": f"printer error: {exc}"}
+    # A macro job has no file to start: the queue sends its commands once the job is 'printing'.
     jobs.transition(job_id, "printing", started=time.time())
     notify.send(f"▶️ Started [{job_id}] {t['title']} on {t['printer']}")
     return {"started": True, "next": "launch is complete; stop here"}

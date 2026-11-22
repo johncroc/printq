@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 
-from . import agent, bedcheck, config, jobs, moonraker, notify, tools
+from . import agent, bedcheck, config, jobs, macro, moonraker, notify, tools
 
 TICK = 10
 RETRY_AFTER = 120  # seconds before a launch that ended back in 'queued' is tried again
@@ -102,7 +102,43 @@ def _force_escalate(job_id: str, phase: str, result: dict) -> None:
         notify.log(f"[{job_id}] could not escalate: {out['refused']}")
 
 
+RUNNING: dict[str, threading.Thread] = {}  # macro jobs this process is sending
+
+
+def _run_macro(job: dict) -> None:
+    """Send a started macro job's commands, once. They take minutes, so not on the queue's own thread."""
+    job_id = job["id"]
+    job = {**job, **jobs.state(job_id)}  # fresh: the runner may have finished since the queue was listed
+    if job["state"] != "printing":
+        return
+    if job_id in RUNNING:
+        if RUNNING[job_id].is_alive():
+            return
+        del RUNNING[job_id]
+    if job.get("macro_started"):
+        # Marked as begun, but not by this process: the queue was restarted half-way through.
+        reason = "the queue restarted while this macro job was running; how far it got is unknown"
+        jobs.transition(job_id, "needs_human", reason=reason, resume="queued", macro_started=0)
+        notify.send(f"⚠️ Needs you [{job_id}] {job['title']} on {job['printer']}\n{reason}. Look at the printer, "
+                    f"then /retry_{job_id} = run all of it again, /drop_{job_id} = remove.")
+        return
+    jobs.update(job_id, macro_started=time.time())
+
+    def work() -> None:
+        try:
+            macro.run(job_id)
+        except Exception:  # noqa: BLE001
+            notify.log(f"[{job_id}] {traceback.format_exc()}")
+            jobs.transition(job_id, "needs_human", reason="the macro runner failed; see notify.log",
+                            resume="queued", macro_started=0)
+
+    RUNNING[job_id] = threading.Thread(target=work, daemon=True, name=f"macro-{job_id}")
+    RUNNING[job_id].start()
+
+
 def _watch_printing(job: dict) -> None:
+    if job.get("kind") == "macro":
+        return _run_macro(job)
     t = jobs.ticket(job["id"])
     cfg = config.printer(t["printer"])
     live = moonraker.status(cfg)
