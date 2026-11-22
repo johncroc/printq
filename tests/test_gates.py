@@ -496,3 +496,16 @@ def test_a_printer_that_ends_in_standby_is_done_when_its_history_says_completed(
     fake_printer.STATE.update(state="standby")
     daemon.tick()
     assert jobs.state("job-1")["state"] == "done"
+
+
+def test_a_prepare_run_that_does_nothing_is_tried_again_before_asking_the_operator(shop, monkeypatch, tmp_path):
+    jobs.transition("job-1", "needs_human")
+    jobs.transition("job-1", "submitted")
+    runs = []
+    monkeypatch.setattr(daemon.agent, "run", lambda phase, job_id: runs.append(phase) or
+                        {"state": "submitted", "ok": False, "text": "I called the tools."})
+    daemon.tick()
+    daemon.tick()
+    assert runs == ["prepare", "prepare"] and jobs.state("job-1")["state"] == "submitted"
+    daemon.tick()
+    assert len(runs) == 3 and jobs.state("job-1")["state"] == "needs_human"

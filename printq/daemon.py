@@ -14,6 +14,7 @@ import traceback
 from . import agent, bedcheck, config, jobs, macro, moonraker, notify, tools
 
 TICK = 10
+PREPARE_TRIES = 3  # runs of the prepare step before a job that never moved is handed to the operator
 RETRY_AFTER = 120  # seconds before a launch that ended back in 'queued' is tried again
 
 
@@ -177,7 +178,13 @@ def tick() -> None:
         try:
             if job["state"] == "submitted":
                 result = agent.run("prepare", job["id"])
-                if not result["ok"]:
+                if result["state"] == "submitted" and job.get("prepare_tries", 0) + 1 < PREPARE_TRIES:
+                    # The agent ended without moving the job at all. Small models sometimes write their
+                    # tool calls out as text instead of making them; nothing happened, so run it again.
+                    jobs.update(job["id"], prepare_tries=job.get("prepare_tries", 0) + 1)
+                    jobs.event(job["id"], "prepare did nothing; trying again")
+                elif not result["ok"]:
+                    jobs.update(job["id"], prepare_tries=0)
                     _force_escalate(job["id"], "prepare", result)
             elif job["state"] == "printing":
                 _watch_printing(job)
