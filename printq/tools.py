@@ -161,7 +161,7 @@ def _start_gates(job_id: str) -> str | None:
     cfg = config.printer(t["printer"])
     live = moonraker.status(cfg)
     if not live["idle"]:
-        return f"printer is {live['state']}"
+        return "printer is cooling down after the last print" if live.get("cooling") else f"printer is {live['state']}"
     spool = live.get("spool")
     if isinstance(spool, dict) and t.get("material") and spool["material"] and spool["material"].upper() != t["material"].upper():
         return f"loaded spool {spool['id']} is {spool['material']}, the job needs {t['material']}"

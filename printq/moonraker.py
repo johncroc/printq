@@ -45,17 +45,27 @@ def post(cfg: dict, path: str, timeout: float = 30) -> dict:
 
 def status(cfg: dict) -> dict:
     """State, last file, position, temperatures and the active spool of one printer."""
+    macro = f"gcode_macro {cfg['cooldown_macro']}" if cfg.get("cooldown_macro") else ""
     s = get(cfg, "/printer/objects/query?print_stats&toolhead=position,homed_axes"
-                 "&heater_bed=temperature,target&extruder=temperature,target&display_status=progress")["status"]
+                 "&heater_bed=temperature,target&extruder=temperature,target&display_status=progress"
+                 + ("&" + urllib.parse.quote(macro) if macro else ""))["status"]
     ps = s["print_stats"]
+    # A cool-down macro that keeps running after the file has ended: the part is not ready and the
+    # printer is not free, whatever print_stats says.
+    cool = s.get(macro) or {}
+    cooling = bool(cool.get("active"))
     out = {
-        "printer": cfg["name"], "state": ps["state"], "idle": ps["state"] in IDLE_STATES,
+        "printer": cfg["name"], "state": ps["state"], "idle": ps["state"] in IDLE_STATES and not cooling,
+        "cooling": cooling,
         "file": ps.get("filename", ""), "progress": round(s["display_status"].get("progress") or 0, 3),
         "position": [round(v, 2) for v in s["toolhead"]["position"][:3]],
         "homed_axes": s["toolhead"]["homed_axes"],
         "bed": [round(s["heater_bed"]["temperature"]), s["heater_bed"]["target"]],
         "nozzle": [round(s["extruder"]["temperature"]), s["extruder"]["target"]],
     }
+    if cooling:
+        stages = cool.get("stages") or []
+        out["cooling_min_left"] = round(sum(x.get("hold", 0) for x in stages[int(cool.get("stage", 0)):]) / 60)
     out["spool"] = spool(cfg) or "unknown (no spool tracking for this printer)"
     return out
 
@@ -119,6 +129,15 @@ def snapshot(cfg: dict) -> bytes:
 
 def gcode(cfg: dict, script: str, timeout: float = 120) -> None:
     post(cfg, "/printer/gcode/script?script=" + urllib.parse.quote(script), timeout=timeout)
+
+
+def last_job_status(cfg: dict) -> str:
+    """Moonraker's verdict on the most recent job: 'completed', 'cancelled', 'error', ... or '' if unknown."""
+    try:
+        found = get(cfg, "/server/history/list?limit=1&order=desc")["jobs"]
+        return found[0]["status"] if found else ""
+    except (PrinterError, KeyError):
+        return ""
 
 
 def klipper_state(cfg: dict) -> str:

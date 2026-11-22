@@ -39,7 +39,8 @@ class Handler(BaseHTTPRequestHandler):
                 "toolhead": {"position": STATE["position"] + [0.0], "homed_axes": STATE["homed"]},
                 "heater_bed": {"temperature": 24.0, "target": 0.0},
                 "extruder": {"temperature": 24.0, "target": 0.0},
-                "display_status": {"progress": 0.0}}}})
+                "display_status": {"progress": 0.0},
+                **({"gcode_macro STAGED_COOLDOWN": STATE["cooldown"]} if STATE.get("cooldown") else {})}}})
         elif url.path == "/server/files/metadata":
             self.reply({"result": {"object_height": STATE["object_height"]}})
         elif url.path == "/server/webcams/list":
@@ -48,6 +49,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(STATE["frame"], ctype="image/jpeg")
         elif url.path == "/server/spoolman/spool_id":
             self.reply({"result": {"spool_id": None}})
+        elif url.path == "/server/history/list":
+            self.reply({"result": {"jobs": [{"status": STATE.get("history", "completed")}]}})
         elif url.path == "/printer/info":
             self.reply({"result": {"state": "ready"}})
         elif url.path == "/server/gcode_store":

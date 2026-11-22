@@ -31,7 +31,8 @@ class FakeGauge:
 def shop(tmp_path, monkeypatch):
     """A fresh data directory, one fake printer, and one job sitting in 'queued'."""
     fake_printer.STATE.update(state="standby", file="last-part.gcode", position=[202.0, 264.0, 169.7], homed="",
-                              uploads=[], started=[], gcode=[], object_height=20.0, true_z=200.0)
+                              uploads=[], started=[], gcode=[], object_height=20.0, true_z=200.0,
+                              cooldown=None, history="completed")
     server = fake_printer.serve(0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     home = tmp_path / "home"
@@ -455,3 +456,43 @@ def test_macro_tickets_are_checked(shop):
     assert t["_help"]["required"] == ["title", "printer", "gcode"] and "model" not in t
     t.update(title="Home", gcode=["G28"])
     assert jobs.validate_ticket(t)["bed"] == "clear"
+
+
+COOLING = {"active": 1, "stage": 2, "stages": [{"bed": 90, "hold": 600}, {"bed": 80, "hold": 600},
+                                               {"bed": 70, "hold": 600}, {"bed": 60, "hold": 600}]}
+
+
+def test_a_print_is_not_done_and_the_printer_not_free_until_the_cool_down_ends(shop, monkeypatch, capsys):
+    shop(cooldown_macro="STAGED_COOLDOWN")
+    tools.check_bed("job-1")
+    tools.upload_job("job-1")
+    tools.start_job("job-1")
+    jobs.update("job-1", started=time.time() - 600)
+    fake_printer.STATE.update(state="complete", cooldown=COOLING)
+    daemon.tick()
+    daemon.tick()
+    assert jobs.state("job-1")["state"] == "printing"
+    assert capsys.readouterr().err.count("Entering cooldown phase, about 20 min") == 1
+    assert moonraker.status(config.printer("p1"))["idle"] is False
+    fake_printer.STATE["cooldown"] = {**COOLING, "active": 0}
+    daemon.tick()
+    assert jobs.state("job-1")["state"] == "done"
+    assert "ready to be cleared from the build plate" in capsys.readouterr().err
+
+
+def test_nothing_launches_on_a_printer_that_is_cooling_down(shop):
+    shop(cooldown_macro="STAGED_COOLDOWN")
+    fake_printer.STATE.update(state="complete", cooldown=COOLING)
+    assert "not idle" in tools.check_bed("job-1")["refused"]
+    fake_printer.STATE["cooldown"] = None
+    assert tools.check_bed("job-1")["verdict"] == "clear"
+
+
+def test_a_printer_that_ends_in_standby_is_done_when_its_history_says_completed(shop):
+    tools.check_bed("job-1")
+    tools.upload_job("job-1")
+    tools.start_job("job-1")
+    jobs.update("job-1", started=time.time() - 600)
+    fake_printer.STATE.update(state="standby")
+    daemon.tick()
+    assert jobs.state("job-1")["state"] == "done"

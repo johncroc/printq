@@ -144,10 +144,21 @@ def _watch_printing(job: dict) -> None:
     live = moonraker.status(cfg)
     if live["state"] in ("printing", "paused") or time.time() - job.get("started", 0) < 90:
         return
-    if live["state"] == "complete":
+    # Some printers clear the file at the end and report 'standby', never 'complete': ask the job history.
+    finished = live["state"] == "complete" or (live["state"] == "standby"
+                                               and moonraker.last_job_status(cfg) == "completed")
+    if finished and live["cooling"]:
+        # Extrusion is over; the part is not ready. The job stays 'printing', which keeps the printer taken.
+        if not job.get("cooling"):
+            jobs.update(job["id"], cooling=time.time())
+            jobs.event(job["id"], "extrusion complete, cooling down")
+            notify.send(f"🧊 [{job['id']}] {t['title']} on {t['printer']}: print extrusion complete. Entering "
+                        f"cooldown phase, about {live.get('cooling_min_left', '?')} min. Do not clear the bed yet.")
+        return
+    if finished:
         jobs.transition(job["id"], "done")
-        notify.send(f"✅ Finished [{job['id']}] {t['title']} on {t['printer']}. "
-                    "The bed needs clearing before the next job.")
+        notify.send(f"✅ [{job['id']}] {t['title']} on {t['printer']}: print is ready to be cleared from the "
+                    "build plate. The bed needs clearing before the next job.")
         try:  # a frame of a bed that certainly holds a part: free training data
             bedcheck.record(t["printer"], moonraker.snapshot(cfg),
                             {"label_hint": "occupied", "job": job["id"], "z": live["position"][2]})
