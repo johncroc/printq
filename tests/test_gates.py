@@ -24,7 +24,7 @@ def shop(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     printer = {"url": f"http://127.0.0.1:{server.server_address[1]}", "start_mode": "auto", "inspect": {
-        "mode": "raise_bed", "park_xy": [202, 264], "step": 10, "min_z": 95, "object_margin": 20, "settle_sec": 0}}
+        "mode": "raise_bed", "park_xy": [202, 264], "step": 10, "object_margin": 20, "settle_sec": 0}}
     (home / "printers.json").write_text(json.dumps({"p1": printer}))
     for name, value in (("HOME", home), ("DATA", tmp_path / "data"), ("JOBS", tmp_path / "data" / "jobs"),
                         ("DATASET", tmp_path / "data" / "dataset"), ("VISION_MODEL", "fixed:bed_clear"),
