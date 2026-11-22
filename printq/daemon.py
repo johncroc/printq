@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 
-from . import agent, bedcheck, config, jobs, macro, moonraker, notify, tools
+from . import agent, bedcheck, config, jobs, macro, moonraker, notify, tools, utilization
 
 TICK = 10
 PREPARE_TRIES = 3  # runs of the prepare step before a job that never moved is handed to the operator
@@ -29,8 +29,13 @@ def command(cmd: str, arg: str) -> str:
                          + (" (held)" if j.get("held") else "")
                          + (f" - {j['reason']}" if j["state"] == "needs_human" and j.get("reason") else "")
                          for j in rows)
+    if cmd in ("util", "utilization"):
+        words = arg.split()
+        days = next((float(w) for w in words if w.replace(".", "", 1).isdigit()), 1.0)
+        name = next((w for w in words if w in config.printers()), None)
+        return utilization.report(days, name)
     if cmd in ("help", "start"):
-        return ("/queue, /show ID, /hold ID, /release ID, /drop ID, /retry ID (run the step again), "
+        return ("/queue, /util [DAYS] [PRINTER] (share of time printing, and what the rest went on), /show ID, /hold ID, /release ID, /drop ID, /retry ID (run the step again), "
                 "/go ID (you checked the bed yourself: start it)")
     if not job_id:
         return f"/{cmd} needs a job id; /queue lists them."
@@ -221,6 +226,7 @@ def main() -> None:
         threading.Thread(target=telegram_loop, daemon=True, name="telegram").start()
     else:
         notify.log("no TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID: messages are logged only; use the CLI for commands")
+    threading.Thread(target=utilization.loop, daemon=True, name="utilization").start()
     while True:
         tick()
         time.sleep(TICK)

@@ -57,6 +57,9 @@ def main() -> None:
     sub.add_parser("daemon", help="run the queue")
     sub.add_parser("doctor", help="check the installation")
     sub.add_parser("queue", help="list jobs")
+    ut = sub.add_parser("util", help="share of time each printer spent printing, and what the rest went on")
+    ut.add_argument("days", nargs="?", default="1")
+    ut.add_argument("printer", nargs="?", default="")
     for name, text in (("show", "one job's details"), ("hold", "keep a job from starting"),
                        ("release", "undo hold"), ("drop", "remove a job"), ("retry", "run the failed step again"),
                        ("go", "you checked the bed yourself: start it")):
@@ -80,6 +83,8 @@ def main() -> None:
             sys.exit(1 if doctor() else 0)
         elif args.cmd == "bedcheck":
             print(json.dumps(bedcheck.check(config.printer(args.printer)), indent=1))
+        elif args.cmd == "util":
+            print(daemon.safe_command("util", f"{args.days} {args.printer}"))
         else:
             print(daemon.safe_command(args.cmd, getattr(args, "job_id", "")))
     except (jobs.JobError, config.ConfigError, moonraker.PrinterError, ValueError) as exc:

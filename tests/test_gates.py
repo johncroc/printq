@@ -536,3 +536,32 @@ def test_an_occupied_bed_is_looked_at_again_until_it_is_clear_then_the_job_goes(
     jobs.update("job-1", next_try=0)
     daemon.tick()
     assert started() == ["printq_job-1.gcode"] and jobs.state("job-1")["state"] == "printing"
+
+
+def test_the_timeline_says_what_a_printer_was_doing_and_why_it_was_not_printing(shop, monkeypatch):
+    from printq import utilization
+    clock = [1_000_000.0]
+    monkeypatch.setattr(utilization.time, "time", lambda: clock[0])
+    last, seen = {}, []
+
+    def look(minutes):
+        utilization.sample(last)
+        seen.append(last["p1"][0])
+        clock[0] += minutes * 60
+
+    look(10)                                              # a queued job, bed not yet looked at
+    jobs.update("job-1", waiting_bed="occupied")
+    look(30)                                              # waiting for the operator to clear the bed
+    fake_printer.STATE["state"] = "printing"
+    look(60)
+    fake_printer.STATE.update(state="complete", cooldown=COOLING)
+    shop(cooldown_macro="STAGED_COOLDOWN")
+    look(20)
+    fake_printer.STATE["cooldown"] = None
+    jobs.transition("job-1", "dropped")
+    look(0)
+    assert seen == ["launching", "bed_not_clear", "printing", "cooldown", "no_work"]
+    t = utilization.totals("p1", 0, clock[0])
+    assert (t["launching"], t["bed_not_clear"], t["printing"], t["cooldown"]) == (600, 1800, 3600, 1200)
+    text = utilization.report(days=1)
+    assert "p1: 50.0% active over 02:00:00" in text and "waiting for the bed to be cleared: 00:30:00" in text

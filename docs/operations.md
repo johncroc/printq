@@ -68,6 +68,20 @@ In Telegram, the id can follow an underscore so the command is one tap: `/go_j12
 | `/retry j12` | `printq retry j12` | Run the step that stopped again |
 | `/drop j12` | `printq drop j12` | Remove the job |
 
+## Utilization
+
+A printer earns only while it prints. The queue records what every configured printer is doing, all the time, including prints it did not start, and `printq util [DAYS] [PRINTER]` (or `/util` in Telegram) reports the share of time spent printing and where the rest went:
+
+| Group | What is in it |
+|---|---|
+| `active` | Printing |
+| `process` | What the workflow itself costs: heating and calibrating before a print, the cool-down after it, bed check and upload, slicing, macro jobs |
+| `operator` | Waiting for a person: a paused print (spool change), a bed that needs clearing, a job waiting for `/go`, on hold, or stopped with a question |
+| `no_work` | Idle with nothing queued for that printer |
+| `down` | Unreachable or in an error state |
+
+The record is one line per change in `utilization/<printer>.jsonl` under the data directory (`{"t": unix time, "state": ..., "job": ...}`; a state lasts until the next line), sampled every 30 seconds. Time during which the queue was not running is counted as not recorded and left out of the percentages.
+
 ## Running as a service
 
 ```bash

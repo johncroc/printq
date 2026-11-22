@@ -35,7 +35,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlsplit(self.path)
         if url.path == "/printer/objects/query":
             self.reply({"result": {"status": {
-                "print_stats": {"state": STATE["state"], "filename": STATE["file"]},
+                "print_stats": {"state": STATE["state"], "filename": STATE["file"],
+                                "print_duration": 60.0 if STATE["state"] == "printing" else 0.0},
                 "toolhead": {"position": STATE["position"] + [0.0], "homed_axes": STATE["homed"]},
                 "heater_bed": {"temperature": 24.0, "target": 0.0},
                 "extruder": {"temperature": 24.0, "target": 0.0},

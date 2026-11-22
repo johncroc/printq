@@ -56,7 +56,7 @@ def status(cfg: dict) -> dict:
     cooling = bool(cool.get("active"))
     out = {
         "printer": cfg["name"], "state": ps["state"], "idle": ps["state"] in IDLE_STATES and not cooling,
-        "cooling": cooling,
+        "cooling": cooling, "extruding": (ps.get("print_duration") or 0) > 0,
         "file": ps.get("filename", ""), "progress": round(s["display_status"].get("progress") or 0, 3),
         "position": [round(v, 2) for v in s["toolhead"]["position"][:3]],
         "homed_axes": s["toolhead"]["homed_axes"],
