@@ -138,10 +138,11 @@ def tick() -> None:
                 # a launch that died half-way; put it back rather than leave it blocking the printer
                 jobs.transition(job["id"], "queued", reason="launch did not finish")
             elif job["state"] == "queued":
+                if job.get("held"):
+                    continue  # a held job steps aside: the next one for that printer may go
                 first = job["printer"] not in seen_queued
                 seen_queued.add(job["printer"])
-                if (not first or job.get("held") or job["printer"] in launching
-                        or job.get("next_try", 0) > time.time()):
+                if not first or job["printer"] in launching or job.get("next_try", 0) > time.time():
                     continue
                 if not moonraker.status(config.printer(job["printer"]))["idle"]:
                     continue

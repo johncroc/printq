@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -79,6 +80,9 @@ def spool(cfg: dict) -> dict | None:
             "remaining_m": round((sp.get("remaining_length") or 0) / 1000, 1)}
 
 
+SNAPSHOT_TRIES, SNAPSHOT_PAUSE = 4, 5  # seconds between tries
+
+
 def snapshot(cfg: dict) -> bytes:
     """One JPEG from the printer's first webcam."""
     url = cfg.get("snapshot_url")
@@ -91,10 +95,18 @@ def snapshot(cfg: dict) -> bytes:
         # Moonraker stores paths relative to the web front end, which is the host without the API port
         parts = urllib.parse.urlsplit(cfg["url"])
         url = f"{parts.scheme}://{parts.hostname}{url}"
-    data = _call(url, timeout=15)  # urllib follows redirects
-    if data[:2] != b"\xff\xd8":
-        raise PrinterError(f"{cfg['name']} webcam did not return a JPEG")
-    return data
+    # Camera servers stall now and then. One slow frame must not end a bed check half-way up.
+    for attempt in range(SNAPSHOT_TRIES):
+        try:
+            data = _call(url, timeout=15)  # urllib follows redirects
+            if data[:2] == b"\xff\xd8":
+                return data
+            problem = PrinterError(f"{cfg['name']} webcam did not return a JPEG")
+        except PrinterError as exc:
+            problem = exc
+        if attempt + 1 < SNAPSHOT_TRIES:
+            time.sleep(SNAPSHOT_PAUSE)
+    raise problem
 
 
 def gcode(cfg: dict, script: str, timeout: float = 120) -> None:

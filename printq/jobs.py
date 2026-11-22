@@ -213,14 +213,17 @@ def all_jobs() -> list[dict]:
     out = []
     if not config.JOBS.is_dir():
         return out
-    for path in sorted(config.JOBS.iterdir(), key=lambda p: p.stat().st_ctime):
+    for path in config.JOBS.iterdir():
         try:
             t = json.loads((path / "ticket.json").read_text())
             s = json.loads((path / "state.json").read_text())
         except (OSError, ValueError):
             continue
-        out.append({"id": path.name, "title": t["title"], "printer": t["printer"], **s})
-    return out
+        out.append({"id": path.name, "title": t["title"], "printer": t["printer"],
+                    "submitted": t.get("submitted", ""), **s})
+    # Order of submission. Not the directory's timestamps: those move every time a file is added to a job.
+    digits = lambda j: int(re.sub(r"\D", "", j["id"]) or 0)  # noqa: E731
+    return sorted(out, key=lambda j: (j["submitted"], digits(j), j["id"]))
 
 
 def active(printer: str | None = None) -> list[dict]:

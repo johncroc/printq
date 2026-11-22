@@ -11,7 +11,7 @@ import time
 import pytest
 
 import fake_printer
-from printq import bedcheck, bedlevel, config, daemon, jobs, slicer, tools
+from printq import bedcheck, bedlevel, config, daemon, jobs, moonraker, slicer, tools
 
 
 class FakeGauge:
@@ -329,3 +329,35 @@ def test_a_blank_ticket_filled_in_is_a_valid_ticket(shop, tmp_path):
 def test_a_misspelt_ticket_field_is_an_error(shop, tmp_path):
     with pytest.raises(jobs.JobError, match="unknown field 'override'"):
         jobs.validate_ticket({"title": "x", "printer": "p1", "model": "m", "presets": "p", "override": {}})
+
+
+def test_a_held_job_does_not_block_the_next_one(shop, monkeypatch):
+    """Jobs run in order of submission, and a held job steps aside."""
+    for job_id, when in (("j10", "2026-01-01 10:00:00"), ("j9", "2026-01-01 09:00:00")):
+        path = config.JOBS / job_id
+        path.mkdir()
+        (path / "ticket.json").write_text(json.dumps({"id": job_id, "title": job_id, "printer": "p1", "submitted": when}))
+        (path / "state.json").write_text(json.dumps({"state": "queued", "held": False, "updated": time.time()}))
+    jobs.transition("job-1", "dropped")
+    assert [j["id"] for j in jobs.active()] == ["j9", "j10"]
+
+    launched = []
+    monkeypatch.setattr(daemon.agent, "run", lambda phase, job_id: launched.append(job_id) or {"state": "queued", "ok": True, "text": ""})
+    jobs.update("j9", held=True)
+    daemon.tick()
+    assert launched == ["j10"]
+
+
+def test_one_stalled_camera_frame_does_not_end_the_check(shop, monkeypatch):
+    real, calls = moonraker._call, []
+
+    def flaky(url, *args, **kwargs):
+        if url.endswith("/snapshot"):
+            calls.append(url)
+            if len(calls) == 1:
+                raise moonraker.PrinterError("timed out")
+        return real(url, *args, **kwargs)
+
+    monkeypatch.setattr(moonraker, "_call", flaky)
+    monkeypatch.setattr(moonraker, "SNAPSHOT_PAUSE", 0)
+    assert moonraker.snapshot(config.printer("p1"))[:2] == b"\xff\xd8" and len(calls) == 2
