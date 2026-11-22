@@ -148,7 +148,7 @@ def test_veto_mode_hold_during_countdown(shop):
 def test_go_after_occupied_verdict_lets_operator_override(shop, monkeypatch):
     monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
     tools.check_bed("job-1")
-    tools.escalate("job-1", "bed occupied")
+    assert "refused" in tools.escalate("job-1", "bed occupied")  # the queue is already waiting for the bed
     daemon.command("go", "job-1")
     assert tools.check_bed("job-1")["verdict"] == "clear"  # vouched, no camera needed
     tools.upload_job("job-1")
@@ -509,3 +509,30 @@ def test_a_prepare_run_that_does_nothing_is_tried_again_before_asking_the_operat
     assert runs == ["prepare", "prepare"] and jobs.state("job-1")["state"] == "submitted"
     daemon.tick()
     assert len(runs) == 3 and jobs.state("job-1")["state"] == "needs_human"
+
+
+def test_an_occupied_bed_is_looked_at_again_until_it_is_clear_then_the_job_goes(shop, monkeypatch, capsys):
+    shop(recheck_sec=300)
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
+    launches = []
+
+    def launch(phase, job_id):  # what the agent does in the launch phase, without the model
+        launches.append(job_id)
+        if tools.check_bed(job_id).get("verdict") == "clear":
+            tools.upload_job(job_id)
+            tools.start_job(job_id)
+        return {"state": jobs.state(job_id)["state"], "ok": True, "text": ""}
+
+    monkeypatch.setattr(daemon.agent, "run", launch)
+    daemon.tick()
+    st = jobs.state("job-1")
+    assert st["state"] == "queued" and 290 < st["next_try"] - time.time() <= 300
+    daemon.tick()
+    assert len(launches) == 1                      # not before the five minutes are up
+    jobs.update("job-1", next_try=0)
+    daemon.tick()
+    assert len(launches) == 2 and capsys.readouterr().err.count("Waiting [job-1]") == 1  # told once
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_clear")
+    jobs.update("job-1", next_try=0)
+    daemon.tick()
+    assert started() == ["printq_job-1.gcode"] and jobs.state("job-1")["state"] == "printing"

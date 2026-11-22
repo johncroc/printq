@@ -5,7 +5,7 @@ Starting a print onto a bed that still holds the last part crashes the machine, 
 1. `get_job` to read the ticket and state.
 2. `check_bed`. It looks through the printer's camera and returns `clear`, `occupied` or `cannot_tell`.
    - `clear`: go on.
-   - `occupied` or `cannot_tell`: call `escalate` with the reason the tool gave, then stop. The owner will clear the bed or look for themselves.
+   - `occupied` or `cannot_tell`: stop. Do not escalate: the tool has already told the owner, and the queue looks at the bed again every few minutes until it is clear.
 3. `upload_job`.
 4. `start_job`. Depending on how the owner configured this printer it starts the print, starts it after a countdown the owner can veto, or waits for the owner's go-ahead. All three are a finished launch.
 

@@ -7,8 +7,8 @@ Starting a print onto a bed that still holds the last part drives the nozzle int
 | Verdict | Meaning | Effect |
 |---|---|---|
 | `clear` | The bed surface is plainly in view and nothing is on it | The job may be uploaded and started, for the next 300 s |
-| `occupied` | A part or other object is on the bed | Escalated to you with the photo |
-| `cannot_tell` | Everything else | Escalated to you with the photo |
+| `occupied` | A part or other object is on the bed | You are told once, with the photo. The job waits and the bed is looked at again every `recheck_sec` (default 5 minutes) until it is clear |
+| `cannot_tell` | Everything else | As for `occupied`: told once, then looked at again. `/go` settles it if you have looked yourself |
 
 `cannot_tell` covers a camera that does not answer, a frame too dark to read, a bed that could not be brought into view, an unsure judge, and a judge that failed in any way. There is no path from an error to `clear`.
 

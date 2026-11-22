@@ -124,11 +124,22 @@ def check_bed(job_id: str) -> dict:
         return {"refused": f"printer unreachable: {exc}. {IDLE_HINT}"}
     result["time"] = time.time()
     if result["verdict"] == "clear":
-        jobs.transition(job_id, "bed_ok", bed=result)
+        jobs.transition(job_id, "bed_ok", bed=result, waiting_bed="")
         return {"verdict": "clear", "reason": result["reason"], "next": "upload_job"}
-    jobs.update(job_id, bed=result)
+    # Not clear: the job keeps its place and the queue looks again by itself. The operator hears about it
+    # once per wait (and again if the answer changes kind), not every time.
+    again = int(cfg.get("recheck_sec", 300))
+    if st.get("waiting_bed") != result["verdict"]:
+        what = ("the bed still holds a part" if result["verdict"] == "occupied"
+                else "the camera could not tell whether the bed is clear")
+        notify.send(f"⏳ Waiting [{job_id}] {t['title']} on {t['printer']}\n{what}: {result['reason'][:500]}\n"
+                    f"Looking again every {again // 60} min; it goes ahead by itself once the bed is seen clear. "
+                    f"/go_{job_id} = I checked, the bed is clear. /hold_{job_id} = stop looking.",
+                    result.get("frame"))
+    jobs.update(job_id, bed=result, waiting_bed=result["verdict"], next_try=time.time() + again)
     return {"verdict": result["verdict"], "reason": result["reason"],
-            "next": "do not upload or start; call escalate with this reason"}
+            "next": f"do not upload or start, and do not escalate: the operator has been told and the queue "
+                    f"will look at the bed again in {again // 60} minutes. Stop here"}
 
 
 def upload_job(job_id: str) -> dict:
@@ -220,6 +231,9 @@ def escalate(job_id: str, reason: str) -> dict:
     st = jobs.state(job_id)
     if st["state"] in ("printing", "done", "dropped"):
         return {"refused": f"job is '{st['state']}'"}
+    if st["state"] == "queued" and st.get("waiting_bed") and st.get("next_try", 0) > time.time():
+        return {"refused": "the operator already knows the bed is not clear and the queue will look again "
+                           "by itself. Stop here"}
     t = jobs.ticket(job_id)
     photo = (st.get("bed") or {}).get("frame")
     notify.send(f"⚠️ Needs you [{job_id}] {t['title']} on {t['printer']}\n{reason.strip()[:800]}\n"

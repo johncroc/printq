@@ -46,7 +46,7 @@ def command(cmd: str, arg: str) -> str:
         jobs.event(job_id, "held by operator")
         return f"[{job_id}] on hold. /release_{job_id} lets it run."
     if cmd == "release":
-        jobs.update(job_id, held=False, next_try=0)
+        jobs.update(job_id, held=False, next_try=0, waiting_bed="")
         return f"[{job_id}] released."
     if cmd == "drop":
         jobs.transition(job_id, "dropped", reason="dropped by operator")
@@ -206,8 +206,8 @@ def tick() -> None:
                     jobs.transition(job["id"], "queued", reason="launch stopped half-way")
                     result["state"] = "queued (after stopping half-way)"
                     _force_escalate(job["id"], "launch", result)
-                elif result["state"] == "queued":
-                    jobs.update(job["id"], next_try=time.time() + RETRY_AFTER)
+                elif result["state"] == "queued" and jobs.state(job["id"]).get("next_try", 0) <= time.time():
+                    jobs.update(job["id"], next_try=time.time() + RETRY_AFTER)  # unless the bed check set its own
         except moonraker.PrinterError as exc:
             notify.log(f"[{job['id']}] printer unreachable: {exc}")
         except Exception:  # noqa: BLE001 - one bad job must not stop the queue

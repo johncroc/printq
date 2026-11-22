@@ -23,6 +23,7 @@ Two files, both outside the repository, in `~/.config/printq/` (override with `P
 | `bed_exclude_area` | Passed to the slicer as `--bed-exclude-area`; `"0x0"` removes a profile's exclusion zone |
 | `snapshot_url` | Camera snapshot URL, if the first webcam in Moonraker is not the right one |
 | `start_mode`, `veto_sec` | See [bed-check.md](bed-check.md#start-modes) |
+| `recheck_sec` | How often a bed that was not seen clear is looked at again (default 300). The job keeps its place in the queue and goes ahead by itself once the bed is clear; you are told once when the wait begins |
 | `cooldown_macro` | Name of a macro that keeps running after the print file has ended, for example a staged bed cool-down. It must expose a variable `active` (and may expose `stage` and `stages` with a `hold` in seconds each, used for the time estimate). While `active` is set the printer is not idle: no bed check, print or macro job starts, and a finished print is announced as "extrusion complete, entering cooldown" first and "ready to be cleared" only when the macro is done |
 | `inspect` | See [bed-check.md](bed-check.md#inspect-settings) |
 

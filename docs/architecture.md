@@ -76,7 +76,7 @@ A refusal is returned to the agent as text that says what state the job is in an
 
 ## Operator override
 
-`/go <id>` means *I looked at the bed myself and it is clear*. It records a clear verdict attributed to the operator, valid for ten minutes, and the normal gates then apply: the printer must still be idle and the job not held. It is the only way past an `occupied` or `cannot_tell` verdict.
+`/go <id>` means *I looked at the bed myself and it is clear*. It records a clear verdict attributed to the operator, valid for ten minutes, and the normal gates then apply: the printer must still be idle and the job not held. It is the quick way past an `occupied` or `cannot_tell` verdict; otherwise the queue looks at the bed again every five minutes and goes ahead once it is seen clear.
 
 ## The agent harness
 
