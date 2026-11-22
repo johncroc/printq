@@ -83,7 +83,7 @@ A user service stops when you log out unless lingering is on: `loginctl enable-l
 Do this once per printer, at the machine, before giving it `veto` or `auto`.
 
 1. Leave `start_mode` at `confirm`.
-2. With the bed clear and the printer in its normal after-print state, run `printq bedcheck <printer>` and watch. On a `raise_bed` printer the bed should come up in steps and stop when the surface is in view, with verdict `clear`. If it stops early with `cannot_tell`, read the reason: usually `min_z` is too high for the camera to see the bed, or `park_xy` does not match where your end G-code leaves the head.
+2. With the bed clear and the printer in its normal after-print state, run `printq bedcheck <printer>` and watch. On a `raise_bed` printer the bed should come up in steps and stop when the surface is in view, with verdict `clear`. If it stops early with `cannot_tell`, read the reason: usually `park_xy` does not match where your end G-code leaves the head, or the travel ran out (`max_steps`, `rest_z`).
 3. Put a finished part on the bed and run it again. The verdict must be `occupied`. Try a tall part and a thin flat one.
 4. Submit a real job and let it reach `awaiting_go`. Check the photo you are sent, send `/go`, and watch the start.
 5. When the verdicts have matched what you saw for a while, switch to `veto`. The dataset index (`$PRINTQ_DATA/dataset/index.jsonl`) records every verdict if you want to count.

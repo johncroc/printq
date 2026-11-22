@@ -9,9 +9,8 @@
       "mode": "raise_bed",
       "park_xy": [202, 264],
       "step": 10,
-      "min_z": 95,
       "object_margin": 20,
-      "max_steps": 10,
+      "max_steps": 20,
       "settle_sec": 2
     }
   },

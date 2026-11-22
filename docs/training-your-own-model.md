@@ -10,7 +10,7 @@ Every frame the bed check takes is saved under `$PRINTQ_DATA/dataset/<printer>/`
 
 ```json
 {"frame": "printer-1/20261119-183807.jpg", "printer": "printer-1", "time": "20261119-183807",
- "judge": "claude-opus-5-5", "view": "bed_clear", "description": "...",
+ "judge": "claude-opus-5-5", "view": "bed_clear", "toolhead": "parked", "description": "...",
  "shadow": {"judge": "ollama:gemma4:12b", "view": "bed_clear"},
  "job": "j12", "z": 99.7, "last_file": "bracket.gcode"}
 ```

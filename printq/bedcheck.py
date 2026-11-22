@@ -10,8 +10,10 @@ Three possible answers, and only one of them permits a print:
 On printers whose bed drops out of the camera's view after a print
 (`inspect.mode: "raise_bed"`), the bed is raised in small steps with a look
 between each, and only while the toolhead is known to be parked clear of the
-bed. A known last object keeps its top below the nozzle plane by a margin.
-The procedure never homes Z.
+bed. The camera decides when to stop: a bed that is out of view is far below
+the gantry, so one more step is always safe while nothing is seen. The
+reported Z is not what stops it, because a bed whose motors were released can
+sink without Klipper noticing. The procedure never homes Z.
 
 Every frame is saved to the dataset directory with the verdicts of each
 judge, so the frames can later train a dedicated classifier
@@ -29,8 +31,9 @@ from typing import Literal
 from . import config, moonraker
 
 VIEWS = ("bed_clear", "object", "bed_not_visible", "unsure")
+TOOLHEADS = ("parked", "elsewhere", "not_visible")
 
-PROMPT = """This is a webcam frame from inside a 3D printer, taken before starting a new print.
+PROMPT = """{intro}
 The print bed is the large flat plate. The toolhead, nozzle, gantry, belts, cables, lights and chamber
 walls are parts of the printer, not objects on the bed.
 
@@ -42,9 +45,27 @@ Decide which of these the frame shows:
   of it is, and no object is visible either.
 - "unsure": the frame is too dark, blurred or ambiguous to decide.
 
+Also report "toolhead": {toolhead}
+
 {context}
 A wrong "bed_clear" crashes the printer into a finished part, so choose it only when you are certain.
 Thin, flat, same-colour parts are easy to miss: look for edges, outlines and shadows on the surface."""
+
+
+INTRO = "This is a webcam frame from inside a 3D printer, taken before starting a new print."
+INTRO_REF = """These are two webcam frames from inside the same 3D printer, from the same fixed camera.
+The first is a reference: it shows the toolhead at its park position, clear of the bed.
+The second is the live frame, taken before starting a new print. Judge only the live frame."""
+TOOLHEAD = 'no reference frame was given, so answer "not_visible".'
+TOOLHEAD_REF = """compare the live frame with the reference.
+- "parked": the toolhead is in the same place in the live frame as in the reference.
+- "elsewhere": the toolhead is visible but in a different place, however slightly.
+- "not_visible": the toolhead cannot be found in the live frame."""
+
+
+def _prompt(context: str, reference: bytes | None) -> str:
+    return PROMPT.format(intro=INTRO_REF if reference else INTRO, context=context,
+                         toolhead=TOOLHEAD_REF if reference else TOOLHEAD)
 
 
 def _context(last_file: str, last_height: float | None) -> str:
@@ -54,7 +75,7 @@ def _context(last_file: str, last_height: float | None) -> str:
     return f"The last job printed here was '{last_file}'{size}; that is the object most likely to still be there."
 
 
-def judge_claude(jpeg: bytes, context: str) -> dict:
+def judge_claude(jpeg: bytes, context: str, reference: bytes | None = None) -> dict:
     """Ask Claude. Any failure (no credentials, refusal, network) comes back as view='unsure'."""
     try:
         import anthropic
@@ -62,6 +83,7 @@ def judge_claude(jpeg: bytes, context: str) -> dict:
 
         class Verdict(BaseModel):
             view: Literal["bed_clear", "object", "bed_not_visible", "unsure"]
+            toolhead: Literal["parked", "elsewhere", "not_visible"]
             description: str
 
         key = config.env("PRINTQ_ANTHROPIC_API_KEY")
@@ -74,9 +96,10 @@ def judge_claude(jpeg: bytes, context: str) -> dict:
             model=config.VISION_MODEL,
             max_tokens=2000,
             messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                             "data": base64.standard_b64encode(jpeg).decode()}},
-                {"type": "text", "text": PROMPT.format(context=context)},
+                *({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                               "data": base64.standard_b64encode(image).decode()}}
+                  for image in ([reference] if reference else []) + [jpeg]),
+                {"type": "text", "text": _prompt(context, reference)},
             ]}],
             output_format=Verdict,
         )
@@ -88,14 +111,16 @@ def judge_claude(jpeg: bytes, context: str) -> dict:
         return {"view": "unsure", "description": f"vision judge unavailable: {type(exc).__name__}: {exc}"[:300]}
 
 
-def judge_ollama(jpeg: bytes, context: str, model: str) -> dict:
+def judge_ollama(jpeg: bytes, context: str, model: str, reference: bytes | None = None) -> dict:
     """Same question to a local vision model. Used in shadow mode: logged, never acted on."""
-    schema = {"type": "object", "required": ["view", "description"], "properties": {
+    schema = {"type": "object", "required": ["view", "toolhead", "description"], "properties": {
         "view": {"type": "string", "enum": ["bed_clear", "object", "bed_not_visible", "unsure"]},
+        "toolhead": {"type": "string", "enum": ["parked", "elsewhere", "not_visible"]},
         "description": {"type": "string"}}}
     body = {"model": model, "stream": False, "think": False, "format": schema, "options": {"temperature": 0},
-            "messages": [{"role": "user", "content": PROMPT.format(context=context),
-                          "images": [base64.b64encode(jpeg).decode()]}]}
+            "messages": [{"role": "user", "content": _prompt(context, reference),
+                          "images": [base64.b64encode(image).decode()
+                                     for image in ([reference] if reference else []) + [jpeg]]}]}
     try:
         req = urllib.request.Request(config.OLLAMA_URL + "/api/chat", json.dumps(body).encode(),
                                      {"Content-Type": "application/json"})
@@ -122,29 +147,44 @@ def record(printer: str, jpeg: bytes, row: dict) -> Path:
     return path
 
 
-def judge(jpeg: bytes, context: str, model: str) -> dict:
+def judge(jpeg: bytes, context: str, model: str, reference: bytes | None = None) -> dict:
     """Route to the configured judge: a Claude model id, 'ollama:<model>' for a local vision model,
-    or 'fixed:<view>' (always the same answer; for tests and dry runs only)."""
+    or 'fixed:<view>[:<toolhead>]' (always the same answer; for tests and dry runs only)."""
     if model.startswith("fixed:"):
-        return {"view": model.split(":", 1)[1], "description": "fixed test verdict"}
+        view, _, toolhead = model.split(":", 1)[1].partition(":")
+        return {"view": view, "toolhead": toolhead or "parked", "description": "fixed test verdict"}
     if model.startswith("ollama:"):
-        return judge_ollama(jpeg, context, model.split(":", 1)[1])
-    return judge_claude(jpeg, context)
+        return judge_ollama(jpeg, context, model.split(":", 1)[1], reference)
+    return judge_claude(jpeg, context, reference)
 
 
-def look(cfg: dict, context: str, extra: dict) -> tuple[str, str, Path | None]:
-    """Take one frame, judge it, record it. Returns (view, description, frame path)."""
+def park_reference(cfg: dict) -> bytes | None:
+    """The printer's reference frame of the toolhead at its park position, if one is configured.
+    A configured reference that cannot be read is an error, not a silent downgrade."""
+    name = cfg.get("inspect", {}).get("park_reference")
+    if not name:
+        return None
+    path = Path(name).expanduser()
+    return (path if path.is_absolute() else config.HOME / path).read_bytes()
+
+
+def look(cfg: dict, context: str, extra: dict) -> tuple[str, str, Path | None, str]:
+    """Take one frame, judge it, record it. Returns (view, description, frame path, toolhead)."""
     try:
         jpeg = moonraker.snapshot(cfg)
-    except moonraker.PrinterError as exc:
-        return "unsure", f"no camera frame: {exc}", None
-    verdict = judge(jpeg, context, config.VISION_MODEL)
+        reference = park_reference(cfg)
+    except (moonraker.PrinterError, OSError) as exc:
+        return "unsure", f"no camera frame or park reference: {exc}", None, "not_visible"
+    verdict = judge(jpeg, context, config.VISION_MODEL, reference)
     view = verdict.get("view") if verdict.get("view") in VIEWS else "unsure"
-    row = {"judge": config.VISION_MODEL, "view": view, "description": verdict.get("description", ""), **extra}
+    toolhead = verdict.get("toolhead") if verdict.get("toolhead") in TOOLHEADS else "not_visible"
+    row = {"judge": config.VISION_MODEL, "view": view, "toolhead": toolhead if reference else None,
+           "description": verdict.get("description", ""), **extra}
     if config.SHADOW_VISION_MODEL:
-        shadow = judge(jpeg, context, config.SHADOW_VISION_MODEL)
-        row["shadow"] = {"judge": config.SHADOW_VISION_MODEL, "view": shadow.get("view")}
-    return view, row["description"], record(cfg["name"], jpeg, row)
+        shadow = judge(jpeg, context, config.SHADOW_VISION_MODEL, reference)
+        row["shadow"] = {"judge": config.SHADOW_VISION_MODEL, "view": shadow.get("view"),
+                         "toolhead": shadow.get("toolhead") if reference else None}
+    return view, row["description"], record(cfg["name"], jpeg, row), toolhead
 
 
 def _near(pos: list, xy: list, tol: float = 1.0) -> bool:
@@ -171,8 +211,8 @@ def check(cfg: dict, job_id: str = "") -> dict:
     while True:
         now = moonraker.status(cfg)
         pos = now["position"]
-        view, description, shot = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"],
-                                                      "z_assumed": assumed})
+        view, description, shot, toolhead = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"],
+                                                               "z_assumed": assumed})
         frame = shot or frame
         if view == "bed_clear":
             return result("clear", description)
@@ -183,14 +223,19 @@ def check(cfg: dict, job_id: str = "") -> dict:
 
         # The bed is out of view. Raise it one step, if every guard allows it.
         park, plan, z = insp["park_xy"], None, pos[2]
+        if insp.get("park_reference") and toolhead != "parked":
+            return result("cannot_tell", f"the camera does not show the toolhead at its park position "
+                                         f"(it reads as '{toolhead}'), so not moving the bed")
         if not placed and "z" not in now["homed_axes"]:
             # Motors were released after the last print. The bed may be raised only once the toolhead
             # is known to be at the park position, clear of the bed.
+            # Klipper's Z is whatever it last knew. A bed with released motors can only have sunk since,
+            # so the number is at best an upper bound on where the bed is, and is treated as assumed.
             if _near(pos, park):
-                plan = "tell"
+                plan, z = "tell", max(z, float(insp.get("rest_z", z)))
             elif "also_from_xy" in insp and _near(pos, insp["also_from_xy"]) \
                     and "x" in now["homed_axes"] and "y" in now["homed_axes"]:
-                plan = "move"
+                plan, z = "move", max(z, float(insp.get("rest_z", z)))
             elif insp.get("unknown_position") == "home_xy" and not now["homed_axes"]:
                 # Klipper restarted and knows nothing. Homing X and Y proves where the toolhead is
                 # without moving the bed towards it; Z is then assumed to be the end-of-print rest height.
@@ -198,16 +243,21 @@ def check(cfg: dict, job_id: str = "") -> dict:
             else:
                 return result("cannot_tell",
                               f"toolhead reads {pos[:2]}, not the known park position, so not moving the bed")
-        # With the toolhead off the bed nothing is above a part that rises with it, so an unknown last
-        # object is no reason to stay put; a known one still keeps its top below the nozzle plane.
-        floor = max(insp["min_z"], height + insp.get("object_margin", 20) if height is not None else 0)
+        # With the toolhead off the bed nothing is above a part that rises with it, and a bed that is out
+        # of view is far below the gantry: the camera, not Z, decides when to stop. Z only bounds the
+        # travel. While Klipper really knows Z, a known last object keeps its top below the nozzle plane.
+        floor = insp.get("stop_z", 10)
+        if not (assumed or plan) and height is not None:
+            floor = max(floor, height + insp.get("object_margin", 20))
         step = insp.get("step", 10)
         if z - step < floor:
-            return result("cannot_tell", f"bed still not in view at Z={z:g}; not raising it past Z={floor:g}")
-        if steps >= insp.get("max_steps", 12):
+            return result("cannot_tell", f"bed still not in view at Z={z:g}{' (assumed)' if assumed or plan else ''}; "
+                                         f"not raising it past Z={floor:g}")
+        if steps >= insp.get("max_steps", 20):
             return result("cannot_tell", f"bed still not in view after {steps} raises")
         if plan == "home":
             moonraker.gcode(cfg, insp.get("home_xy_gcode", "G28 X Y"))
+        if plan:
             assumed = True
         if plan in ("home", "move"):
             moonraker.gcode(cfg, f"G90\nG1 X{park[0]} Y{park[1]} F3000\nM400")
