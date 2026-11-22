@@ -59,19 +59,36 @@ Thin, flat, same-colour parts are easy to miss: look for edges, outlines and sha
 
 
 INTRO = "This is a webcam frame from inside a 3D printer, taken before starting a new print."
-INTRO_REF = """These are two webcam frames from inside the same 3D printer, from the same fixed camera.
-The first is a reference: it shows the toolhead at its park position, clear of the bed.
-The second is the live frame, taken before starting a new print. Judge only the live frame."""
-TOOLHEAD = 'no reference frame was given, so answer "not_visible".'
-TOOLHEAD_REF = """compare the live frame with the reference.
+INTRO_REF = """These are {count} webcam frames from inside the same 3D printer, from the same fixed camera.
+{captions}
+The last is the live frame, taken before starting a new print. Judge only the live frame."""
+CAPTIONS = {
+    "park": "a reference showing the toolhead at its park position, clear of the bed, with the bed "
+            "lowered out of view.",
+    "clear": "a reference showing this printer's own bed raised into view and completely empty. That "
+             "surface, its colour and its edges are the bed, not an object. When the bed is lower, only "
+             "its rear corner or edge enters at the bottom of the frame: that is still the bed "
+             '("bed_not_visible" while it is only a small part), never an "object". Answer "bed_clear" '
+             "only when the live frame shows at least as much of the bed as this reference does.",
+}
+ORDINALS = ("The first", "The second")
+TOOLHEAD = 'no park reference frame was given, so answer "not_visible".'
+TOOLHEAD_REF = """compare the live frame with the park reference.
 - "parked": the toolhead is in the same place in the live frame as in the reference.
 - "elsewhere": the toolhead is visible but in a different place, however slightly.
 - "not_visible": the toolhead cannot be found in the live frame."""
 
 
-def _prompt(context: str, reference: bytes | None) -> str:
-    return PROMPT.format(intro=INTRO_REF if reference else INTRO, context=context,
-                         toolhead=TOOLHEAD_REF if reference else TOOLHEAD)
+def _prompt(context: str, reference: dict | None) -> str:
+    reference = reference or {}
+    captions = "\n".join(f"{ORDINALS[n]} is {CAPTIONS[kind]}" for n, kind in enumerate(reference))
+    intro = INTRO_REF.format(count=len(reference) + 1, captions=captions) if reference else INTRO
+    return PROMPT.format(intro=intro, context=context,
+                         toolhead=TOOLHEAD_REF if "park" in reference else TOOLHEAD)
+
+
+def _images(jpeg: bytes, reference: dict | None) -> list[bytes]:
+    return [*(reference or {}).values(), jpeg]
 
 
 def _context(last_file: str, last_height: float | None) -> str:
@@ -81,7 +98,7 @@ def _context(last_file: str, last_height: float | None) -> str:
     return f"The last job printed here was '{last_file}'{size}; that is the object most likely to still be there."
 
 
-def judge_claude(jpeg: bytes, context: str, reference: bytes | None = None) -> dict:
+def judge_claude(jpeg: bytes, context: str, reference: dict | None = None) -> dict:
     """Ask Claude. Any failure (no credentials, refusal, network) comes back as view='unsure'."""
     try:
         import anthropic
@@ -105,7 +122,7 @@ def judge_claude(jpeg: bytes, context: str, reference: bytes | None = None) -> d
             messages=[{"role": "user", "content": [
                 *({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                "data": base64.standard_b64encode(image).decode()}}
-                  for image in ([reference] if reference else []) + [jpeg]),
+                  for image in _images(jpeg, reference)),
                 {"type": "text", "text": _prompt(context, reference)},
             ]}],
             output_format=Verdict,
@@ -118,7 +135,7 @@ def judge_claude(jpeg: bytes, context: str, reference: bytes | None = None) -> d
         return {"view": "unsure", "description": f"vision judge unavailable: {type(exc).__name__}: {exc}"[:300]}
 
 
-def judge_ollama(jpeg: bytes, context: str, model: str, reference: bytes | None = None) -> dict:
+def judge_ollama(jpeg: bytes, context: str, model: str, reference: dict | None = None) -> dict:
     """Same question to a local vision model. Used in shadow mode: logged, never acted on."""
     schema = {"type": "object", "required": ["view", "toolhead", "object_at", "description"], "properties": {
         "object_at": {"type": "string", "enum": ["none", "bottom_edge", "higher"]},
@@ -128,7 +145,7 @@ def judge_ollama(jpeg: bytes, context: str, model: str, reference: bytes | None 
     body = {"model": model, "stream": False, "think": False, "format": schema, "options": {"temperature": 0},
             "messages": [{"role": "user", "content": _prompt(context, reference),
                           "images": [base64.b64encode(image).decode()
-                                     for image in ([reference] if reference else []) + [jpeg]]}]}
+                                     for image in _images(jpeg, reference)]}]}
     try:
         req = urllib.request.Request(config.OLLAMA_URL + "/api/chat", json.dumps(body).encode(),
                                      {"Content-Type": "application/json"})
@@ -155,7 +172,7 @@ def record(printer: str, jpeg: bytes, row: dict) -> Path:
     return path
 
 
-def judge(jpeg: bytes, context: str, model: str, reference: bytes | None = None) -> dict:
+def judge(jpeg: bytes, context: str, model: str, reference: dict | None = None) -> dict:
     """Route to the configured judge: a Claude model id, 'ollama:<model>' for a local vision model,
     or 'fixed:<view>[:<toolhead>[:<object_at>]]' (always the same answer; for tests and dry runs only)."""
     if model.startswith("fixed:"):
@@ -167,14 +184,17 @@ def judge(jpeg: bytes, context: str, model: str, reference: bytes | None = None)
     return judge_claude(jpeg, context, reference)
 
 
-def park_reference(cfg: dict) -> bytes | None:
-    """The printer's reference frame of the toolhead at its park position, if one is configured.
-    A configured reference that cannot be read is an error, not a silent downgrade."""
-    name = cfg.get("inspect", {}).get("park_reference")
-    if not name:
-        return None
-    path = Path(name).expanduser()
-    return (path if path.is_absolute() else config.HOME / path).read_bytes()
+def references(cfg: dict) -> dict:
+    """The printer's reference frames, {"park": jpeg, "clear": jpeg}, for those that are configured:
+    the toolhead at its park position, and the empty bed in view. A configured reference that cannot
+    be read is an error, not a silent downgrade."""
+    out = {}
+    for kind in ("park", "clear"):
+        name = cfg.get("inspect", {}).get(f"{kind}_reference")
+        if name:
+            path = Path(name).expanduser()
+            out[kind] = (path if path.is_absolute() else config.HOME / path).read_bytes()
+    return out
 
 
 def look(cfg: dict, context: str, extra: dict) -> tuple[str, str, Path | None, str, str]:
@@ -182,20 +202,20 @@ def look(cfg: dict, context: str, extra: dict) -> tuple[str, str, Path | None, s
     An object whose place is not reported counts as "higher": the answer that permits no further motion."""
     try:
         jpeg = moonraker.snapshot(cfg)
-        reference = park_reference(cfg)
+        reference = references(cfg)
     except (moonraker.PrinterError, OSError) as exc:
-        return "unsure", f"no camera frame or park reference: {exc}", None, "not_visible", "higher"
+        return "unsure", f"no camera frame or reference frame: {exc}", None, "not_visible", "higher"
     verdict = judge(jpeg, context, config.VISION_MODEL, reference)
     view = verdict.get("view") if verdict.get("view") in VIEWS else "unsure"
     toolhead = verdict.get("toolhead") if verdict.get("toolhead") in TOOLHEADS else "not_visible"
     object_at = verdict.get("object_at") if verdict.get("object_at") in OBJECT_AT else "higher"
-    row = {"judge": config.VISION_MODEL, "view": view, "toolhead": toolhead if reference else None,
+    row = {"judge": config.VISION_MODEL, "view": view, "toolhead": toolhead if "park" in reference else None,
            "object_at": object_at if view == "object" else None,
            "description": verdict.get("description", ""), **extra}
     if config.SHADOW_VISION_MODEL:
         shadow = judge(jpeg, context, config.SHADOW_VISION_MODEL, reference)
         row["shadow"] = {"judge": config.SHADOW_VISION_MODEL, "view": shadow.get("view"),
-                         "toolhead": shadow.get("toolhead") if reference else None}
+                         "toolhead": shadow.get("toolhead") if "park" in reference else None}
     return view, row["description"], record(cfg["name"], jpeg, row), toolhead, object_at
 
 

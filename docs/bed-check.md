@@ -89,7 +89,8 @@ An unknown last object (for example after a Klipper restart) no longer prevents 
   "settle_sec": 2,
   "unknown_position": "home_xy",
   "rest_z": 170,
-  "park_reference": "reference/printer-1-park.jpg"
+  "park_reference": "reference/printer-1-park.jpg",
+  "clear_reference": "reference/printer-1-clear.jpg"
 }
 ```
 
@@ -102,6 +103,14 @@ An unknown last object (for example after a Klipper restart) no longer prevents 
 This closes a gap in the position check: with the motors off, Klipper's X and Y are as stale as its Z. The camera sees where the toolhead actually is.
 
 To make a reference, park the toolhead, check the frame by eye, and copy it from the dataset directory (every frame the bed check takes is saved there). Replace it whenever the camera is moved. The answer is recorded with every frame as `toolhead`, so the frames also train this part of [your own model](training-your-own-model.md).
+
+### Showing the judge the empty bed
+
+`clear_reference` names a frame from the same camera with the bed raised into view and nothing on it. The judge is shown it too, and told that this surface is the bed.
+
+The reference also sets the bar for `clear`: the judge answers `bed_clear` only when the live frame shows at least as much of the bed as the reference does. Take it with the bed at the height where the camera sees the whole plate, or as much of it as it ever can; a part lying on a region the reference does not show cannot be seen in a live frame either.
+
+Without it, the rear corner of the bed entering at the bottom of the frame can be taken for a flat part rising into view, most easily when the plate is brightly coloured. That costs a false `occupied`, never a false `clear`, but it stops the queue for nothing.
 
 ## Start modes
 
