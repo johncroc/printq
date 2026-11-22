@@ -35,7 +35,7 @@ It was tried first. A 12B local vision model, asked about a frame in which the b
 On printers where the bed moves in Z, the bed sits low after a print and the camera may see none of it. With `"inspect": {"mode": "raise_bed", ...}` printq raises the bed one step at a time and looks after each step:
 
 1. Take a frame and judge it.
-   - `object`: stop, verdict `occupied`. A tall part rises into view before the bed surface does, and this is where it is caught.
+   - `object`: verdict `occupied`. A tall part rises into view before the bed surface does, and this is where it is caught. If only its top is just entering at the bottom edge of the frame, the bed is first raised one more step (`object_confirm_steps`, default 1) for a closer look, under the same guards as any other raise. The verdict is `occupied` whatever the closer frame shows: a sighting is never overruled.
    - `bed_clear`: stop, verdict `clear`.
    - `unsure`: stop, verdict `cannot_tell`.
    - `bed_not_visible`: continue.
@@ -85,6 +85,7 @@ An unknown last object (for example after a Klipper restart) no longer prevents 
   "stop_z": 10,
   "object_margin": 20,
   "max_steps": 20,
+  "object_confirm_steps": 1,
   "settle_sec": 2,
   "unknown_position": "home_xy",
   "rest_z": 170,

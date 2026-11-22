@@ -238,6 +238,39 @@ def test_object_seen_while_raising_stops_the_motion(shop, monkeypatch):
     assert out["verdict"] == "occupied" and out["steps"] == 2
 
 
+def test_object_entering_at_the_bottom_edge_gets_one_confirming_raise(shop, monkeypatch):
+    def judged(*seq):
+        answers = iter(seq)
+        monkeypatch.setattr(bedcheck, "judge", lambda *a: dict(zip(("view", "object_at"), next(answers)),
+                                                                description="seen", toolhead="parked"))
+        fake_printer.STATE.update(position=[202.0, 264.0, 169.7], homed="", gcode=[])
+        return bedcheck.check(config.printer("p1"))
+
+    edge, nothing = ("object", "bottom_edge"), ("bed_not_visible", "none")
+    out = judged(nothing, edge, ("object", "higher"))
+    assert out["verdict"] == "occupied" and out["steps"] == 2  # one raise to find it, one to confirm
+    out = judged(nothing, edge, edge, edge)
+    assert out["verdict"] == "occupied" and out["steps"] == 2  # still at the edge: no third raise
+    out = judged(nothing, edge, nothing)
+    assert out["verdict"] == "occupied" and out["steps"] == 2  # a sighting is not forgotten
+    out = judged(nothing, edge, ("unsure", "none"))
+    assert out["verdict"] == "occupied"
+    out = judged(nothing, edge, ("bed_clear", "none"))
+    assert out["verdict"] == "occupied"  # nor overruled by a later "clear"
+    out = judged(("object", "higher"))
+    assert out["verdict"] == "occupied" and out["steps"] == 0  # anywhere else: no motion at all
+
+
+def test_confirming_raise_still_needs_the_parked_toolhead(shop, monkeypatch, tmp_path):
+    ref = tmp_path / "park.jpg"
+    ref.write_bytes(b"jpeg")
+    cfg = config.printer("p1")
+    cfg["inspect"]["park_reference"] = str(ref)
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object:elsewhere:bottom_edge")
+    out = bedcheck.check(cfg)
+    assert out["verdict"] == "occupied" and fake_printer.STATE["gcode"] == []
+
+
 def test_state_machine_rejects_illegal_moves(shop):
     with pytest.raises(jobs.JobError):
         jobs.transition("job-1", "printing")

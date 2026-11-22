@@ -32,6 +32,7 @@ from . import config, moonraker
 
 VIEWS = ("bed_clear", "object", "bed_not_visible", "unsure")
 TOOLHEADS = ("parked", "elsewhere", "not_visible")
+OBJECT_AT = ("none", "bottom_edge", "higher")
 
 PROMPT = """{intro}
 The print bed is the large flat plate. The toolhead, nozzle, gantry, belts, cables, lights and chamber
@@ -46,6 +47,11 @@ Decide which of these the frame shows:
 - "unsure": the frame is too dark, blurred or ambiguous to decide.
 
 Also report "toolhead": {toolhead}
+
+Also report "object_at", where the object is in the frame:
+- "none": no object is seen.
+- "bottom_edge": only its top is just entering at the bottom edge of the frame, far below the gantry.
+- "higher": any other place, including an object lying on a bed surface that is in view.
 
 {context}
 A wrong "bed_clear" crashes the printer into a finished part, so choose it only when you are certain.
@@ -84,6 +90,7 @@ def judge_claude(jpeg: bytes, context: str, reference: bytes | None = None) -> d
         class Verdict(BaseModel):
             view: Literal["bed_clear", "object", "bed_not_visible", "unsure"]
             toolhead: Literal["parked", "elsewhere", "not_visible"]
+            object_at: Literal["none", "bottom_edge", "higher"]
             description: str
 
         key = config.env("PRINTQ_ANTHROPIC_API_KEY")
@@ -113,7 +120,8 @@ def judge_claude(jpeg: bytes, context: str, reference: bytes | None = None) -> d
 
 def judge_ollama(jpeg: bytes, context: str, model: str, reference: bytes | None = None) -> dict:
     """Same question to a local vision model. Used in shadow mode: logged, never acted on."""
-    schema = {"type": "object", "required": ["view", "toolhead", "description"], "properties": {
+    schema = {"type": "object", "required": ["view", "toolhead", "object_at", "description"], "properties": {
+        "object_at": {"type": "string", "enum": ["none", "bottom_edge", "higher"]},
         "view": {"type": "string", "enum": ["bed_clear", "object", "bed_not_visible", "unsure"]},
         "toolhead": {"type": "string", "enum": ["parked", "elsewhere", "not_visible"]},
         "description": {"type": "string"}}}
@@ -149,10 +157,11 @@ def record(printer: str, jpeg: bytes, row: dict) -> Path:
 
 def judge(jpeg: bytes, context: str, model: str, reference: bytes | None = None) -> dict:
     """Route to the configured judge: a Claude model id, 'ollama:<model>' for a local vision model,
-    or 'fixed:<view>[:<toolhead>]' (always the same answer; for tests and dry runs only)."""
+    or 'fixed:<view>[:<toolhead>[:<object_at>]]' (always the same answer; for tests and dry runs only)."""
     if model.startswith("fixed:"):
-        view, _, toolhead = model.split(":", 1)[1].partition(":")
-        return {"view": view, "toolhead": toolhead or "parked", "description": "fixed test verdict"}
+        view, toolhead, object_at = (model.split(":", 1)[1].split(":") + ["", ""])[:3]
+        return {"view": view, "toolhead": toolhead or "parked", "object_at": object_at or "higher",
+                "description": "fixed test verdict"}
     if model.startswith("ollama:"):
         return judge_ollama(jpeg, context, model.split(":", 1)[1], reference)
     return judge_claude(jpeg, context, reference)
@@ -168,23 +177,26 @@ def park_reference(cfg: dict) -> bytes | None:
     return (path if path.is_absolute() else config.HOME / path).read_bytes()
 
 
-def look(cfg: dict, context: str, extra: dict) -> tuple[str, str, Path | None, str]:
-    """Take one frame, judge it, record it. Returns (view, description, frame path, toolhead)."""
+def look(cfg: dict, context: str, extra: dict) -> tuple[str, str, Path | None, str, str]:
+    """Take one frame, judge it, record it. Returns (view, description, frame path, toolhead, object_at).
+    An object whose place is not reported counts as "higher": the answer that permits no further motion."""
     try:
         jpeg = moonraker.snapshot(cfg)
         reference = park_reference(cfg)
     except (moonraker.PrinterError, OSError) as exc:
-        return "unsure", f"no camera frame or park reference: {exc}", None, "not_visible"
+        return "unsure", f"no camera frame or park reference: {exc}", None, "not_visible", "higher"
     verdict = judge(jpeg, context, config.VISION_MODEL, reference)
     view = verdict.get("view") if verdict.get("view") in VIEWS else "unsure"
     toolhead = verdict.get("toolhead") if verdict.get("toolhead") in TOOLHEADS else "not_visible"
+    object_at = verdict.get("object_at") if verdict.get("object_at") in OBJECT_AT else "higher"
     row = {"judge": config.VISION_MODEL, "view": view, "toolhead": toolhead if reference else None,
+           "object_at": object_at if view == "object" else None,
            "description": verdict.get("description", ""), **extra}
     if config.SHADOW_VISION_MODEL:
         shadow = judge(jpeg, context, config.SHADOW_VISION_MODEL, reference)
         row["shadow"] = {"judge": config.SHADOW_VISION_MODEL, "view": shadow.get("view"),
                          "toolhead": shadow.get("toolhead") if reference else None}
-    return view, row["description"], record(cfg["name"], jpeg, row), toolhead
+    return view, row["description"], record(cfg["name"], jpeg, row), toolhead, object_at
 
 
 def _near(pos: list, xy: list, tol: float = 1.0) -> bool:
@@ -200,8 +212,12 @@ def check(cfg: dict, job_id: str = "") -> dict:
     context = _context(st["file"], height)
     insp = cfg.get("inspect", {"mode": "static"})
     frame, steps, placed, assumed = None, 0, False, False
+    sighting, confirms = "", 0  # an object first seen entering at the bottom edge, and the raises spent on it
 
     def result(verdict: str, reason: str) -> dict:
+        if sighting and verdict == "cannot_tell":
+            # An object was seen and the confirming look could not be had: the sighting stands.
+            verdict, reason = "occupied", f"{sighting} (could not confirm it closer: {reason})"
         if assumed:
             # Z was only assumed for the relative raises. Release the motors so Klipper forgets it:
             # nothing may later trust that number, and the next print homes properly anyway.
@@ -211,14 +227,22 @@ def check(cfg: dict, job_id: str = "") -> dict:
     while True:
         now = moonraker.status(cfg)
         pos = now["position"]
-        view, description, shot, toolhead = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"],
+        view, description, shot, toolhead, object_at = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"],
                                                                "z_assumed": assumed})
         frame = shot or frame
-        if view == "bed_clear":
+        if view == "bed_clear" and not sighting:  # a sighting is never overruled by a later frame
             return result("clear", description)
         if view == "object":
-            return result("occupied", description)
-        if view == "unsure" or insp.get("mode") != "raise_bed":
+            # A top just entering at the bottom edge is far below the gantry. With the toolhead parked
+            # the bed may come up a little more for a better look before the verdict; anywhere else in
+            # the frame, or once the confirming raises are spent, the verdict is immediate.
+            if insp.get("mode") != "raise_bed" or object_at != "bottom_edge" \
+                    or confirms >= insp.get("object_confirm_steps", 1):
+                return result("occupied", description)
+            sighting, confirms = description, confirms + 1
+        elif sighting:
+            return result("occupied", f"{sighting} (the next frame was judged '{view}': {description})")
+        elif view == "unsure" or insp.get("mode") != "raise_bed":
             return result("cannot_tell", description)
 
         # The bed is out of view. Raise it one step, if every guard allows it.
