@@ -32,11 +32,11 @@ Frames from one printer should not be assumed to transfer to another camera posi
 
 1. **Collect** with the API judge in charge. Set `PRINTQ_SHADOW_VISION_MODEL` to any local candidate to see how it would have done on the same frames.
 2. **Review the labels.** Read through `index.jsonl` beside the frames and correct what the judge got wrong. A few hundred images is an evening.
-3. **Train a small classifier.** Fine-tuning a compact pretrained image backbone (a ResNet-18 or a small ViT) on four classes fits comfortably on a 16 GB GPU and trains in minutes at this scale. Hold out whole print jobs, not random frames, for validation: consecutive frames of one inspection are nearly identical and would leak.
+3. **Train a small classifier.** Fine-tuning a compact pretrained image backbone (a ResNet-18 or a small ViT) on five classes fits comfortably on a 16 GB GPU and trains in minutes at this scale. Hold out whole print jobs, not random frames, for validation: consecutive frames of one inspection are nearly identical and would leak.
 4. **Measure the right error.** Accuracy is not the number that matters. Count the *false clears*: frames labelled `object` or `bed_not_visible` that the model called `bed_clear`. Choose the decision threshold so that count is zero on the validation set, and accept more `unsure` answers as the price.
 5. **Run it in shadow.** Serve the model and name it in `PRINTQ_SHADOW_VISION_MODEL`. It now sees every live frame without deciding anything.
 6. **Promote it** by putting it in `PRINTQ_VISION_MODEL` once its shadow record has no false clears over enough jobs to convince you. Keeping the API judge as the shadow for a while afterwards costs little.
 
-Steps 5 and 6 need a small adapter: `bedcheck.judge()` routes on the model name, and a locally served classifier is one more branch there returning one of the four views.
+Steps 5 and 6 need a small adapter: `bedcheck.judge()` routes on the model name, and a locally served classifier is one more branch there returning one of the five views.
 
 Until then the default judge costs one small image per look, a handful of looks per job.

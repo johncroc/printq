@@ -10,8 +10,10 @@
       "park_xy": [202, 264],
       "step": 10,
       "object_margin": 20,
-      "max_steps": 20,
-      "settle_sec": 2
+      "max_steps": 26,
+      "settle_sec": 2,
+      "park_reference": "reference/printer-1-park.jpg",
+      "clear_reference": "reference/printer-1-clear.jpg"
     }
   },
   "printer-2": {

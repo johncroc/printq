@@ -11,14 +11,27 @@ import time
 import pytest
 
 import fake_printer
-from printq import bedcheck, config, daemon, jobs, slicer, tools
+from printq import bedcheck, bedlevel, config, daemon, jobs, slicer, tools
+
+
+class FakeGauge:
+    """Bed height by camera, played by the fake printer's own Z: the bed enters the frame 160 mm down
+    and its far edge is at the reference row when the bed is at the top."""
+    ok, target = True, 0.25
+
+    def __init__(self, references):
+        pass
+
+    def row(self, jpeg):
+        z = fake_printer.STATE["true_z"]
+        return None if z > 160 else round(0.25 + 0.75 * z / 160, 4)
 
 
 @pytest.fixture
 def shop(tmp_path, monkeypatch):
     """A fresh data directory, one fake printer, and one job sitting in 'queued'."""
     fake_printer.STATE.update(state="standby", file="last-part.gcode", position=[202.0, 264.0, 169.7], homed="",
-                              uploads=[], started=[], gcode=[], object_height=20.0)
+                              uploads=[], started=[], gcode=[], object_height=20.0, true_z=200.0)
     server = fake_printer.serve(0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     home = tmp_path / "home"
@@ -30,6 +43,7 @@ def shop(tmp_path, monkeypatch):
                         ("DATASET", tmp_path / "data" / "dataset"), ("VISION_MODEL", "fixed:bed_clear"),
                         ("SHADOW_VISION_MODEL", ""), ("SPOOLMAN_URL", "")):
         monkeypatch.setattr(config, name, value)
+    monkeypatch.setattr(bedlevel, "Gauge", FakeGauge)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     job = config.JOBS / "job-1"
     job.mkdir(parents=True)
@@ -45,6 +59,14 @@ def shop(tmp_path, monkeypatch):
 
     yield reconfigure
     server.shutdown()
+
+
+class NoGauge(FakeGauge):
+    """A printer without reference frames: the camera cannot measure bed height."""
+    ok, target = False, None
+
+    def row(self, jpeg):
+        return None
 
 
 def started():
@@ -136,13 +158,28 @@ def zs():
     return fake_printer.STATE["position"][2]
 
 
-def test_bed_keeps_rising_while_out_of_view_until_travel_runs_out(shop, monkeypatch):
-    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")
+def true_z():
+    return fake_printer.STATE["true_z"]
+
+
+def test_bed_rises_to_inspection_height_and_never_past_it(shop, monkeypatch):
+    out = bedcheck.check(config.printer("p1"))  # the judge calls every frame clear, from far down already
+    assert out["verdict"] == "clear" and out["steps"] == 19  # 200 -> 10: within one raise of the top
+    assert 0 < true_z() <= 15
+    sent = fake_printer.STATE["gcode"]
+    assert not any("G28" in g for g in sent)  # never homes at a known park
+    assert "Z=250" in sent[0]  # Klipper's own stale 169.7 is not used for anything
+    assert sent[-1] == "M84"  # and the placeholder is forgotten again
+
+
+@pytest.mark.parametrize("start", [258.0, 120.0, 14.0, 3.0])
+def test_wherever_the_bed_really_is_it_stops_short_of_the_top(shop, monkeypatch, start):
+    # Klipper says 169.7 throughout; the bed has sunk, or was moved up by hand, since the motors went off.
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")  # a judge that never says stop
+    fake_printer.STATE["true_z"] = start
     out = bedcheck.check(config.printer("p1"))
-    assert out["verdict"] == "cannot_tell"
-    assert zs() >= 10 and out["steps"] == 15  # 169.7 -> 19.7, the next step would cross stop_z 10
-    assert not any("G28" in g for g in fake_printer.STATE["gcode"])  # never homes at a known park
-    assert fake_printer.STATE["gcode"][-1] == "M84"  # Z was only what Klipper last knew: forget it
+    assert out["verdict"] == "cannot_tell" and "inspection height" in out["reason"]
+    assert 0 < true_z() <= 15
 
 
 def test_number_of_raises_is_bounded(shop, monkeypatch):
@@ -152,17 +189,11 @@ def test_number_of_raises_is_bounded(shop, monkeypatch):
     assert bedcheck.check(cfg)["steps"] == 4
 
 
-def test_stale_z_after_the_bed_sank_does_not_stop_the_raise(shop, monkeypatch):
-    # An earlier check raised the bed to 119.7, the motors timed out and the bed sank. Klipper still
-    # reports 119.7. The camera must be allowed to bring the bed back into view.
-    views = iter(["bed_not_visible"] * 6 + ["bed_clear"])
-    monkeypatch.setattr(bedcheck, "judge", lambda *a: {"view": next(views), "description": "seen"})
-    fake_printer.STATE.update(position=[202.0, 264.0, 119.7], homed="")
-    cfg = config.printer("p1")
-    cfg["inspect"].update(rest_z=170)
-    out = bedcheck.check(cfg)
-    assert out["verdict"] == "clear" and out["steps"] == 6
-    assert "Z=170" in fake_printer.STATE["gcode"][0]  # counted from the rest height, not the stale number
+def test_unknown_height_without_reference_frames_means_no_motion(shop, monkeypatch):
+    monkeypatch.setattr(bedlevel, "Gauge", NoGauge)
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")
+    out = bedcheck.check(config.printer("p1"))
+    assert out["verdict"] == "cannot_tell" and "reference" in out["reason"] and fake_printer.STATE["gcode"] == []
 
 
 def test_toolhead_must_be_seen_at_the_park_when_a_reference_is_configured(shop, monkeypatch, tmp_path):
@@ -175,17 +206,25 @@ def test_toolhead_must_be_seen_at_the_park_when_a_reference_is_configured(shop, 
         out = bedcheck.check(cfg)
         assert out["verdict"] == "cannot_tell" and "park" in out["reason"] and fake_printer.STATE["gcode"] == []
     monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible:parked")
-    assert bedcheck.check(cfg)["steps"] == 15
+    assert bedcheck.check(cfg)["steps"] == 19
     cfg["inspect"]["park_reference"] = str(tmp_path / "missing.jpg")  # unreadable reference: no motion
-    fake_printer.STATE.update(position=[202.0, 264.0, 169.7], homed="", gcode=[])
+    fake_printer.STATE.update(position=[202.0, 264.0, 169.7], homed="", gcode=[], true_z=200.0)
     assert bedcheck.check(cfg)["verdict"] == "cannot_tell" and fake_printer.STATE["gcode"] == []
 
 
-def test_tall_last_object_keeps_the_bed_where_it_is(shop, monkeypatch):
+def test_tall_last_object_keeps_the_bed_where_it_is_when_z_is_real(shop, monkeypatch):
     monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")
     fake_printer.STATE.update(object_height=150.0, homed="xyz")  # motors held since the print: Z is real
     assert bedcheck.check(config.printer("p1"))["steps"] == 0
-    assert zs() == 169.7 and fake_printer.STATE["gcode"] == []
+    assert fake_printer.STATE["gcode"] == []
+
+
+def test_real_z_goes_no_higher_than_stop_z(shop, monkeypatch):
+    monkeypatch.setattr(bedlevel, "Gauge", NoGauge)  # a Z that Klipper really knows is enough to raise by
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")
+    fake_printer.STATE.update(position=[202.0, 264.0, 60.0], homed="xyz", object_height=None)
+    out = bedcheck.check(config.printer("p1"))
+    assert out["steps"] == 5 and fake_printer.STATE["position"][2] == 10.0  # the next step would cross Z=1
 
 
 def test_unknown_position_means_no_motion(shop, monkeypatch):
@@ -198,37 +237,16 @@ def test_unknown_position_means_no_motion(shop, monkeypatch):
     assert fake_printer.STATE["gcode"] == []
 
 
-def test_unknown_object_height_still_raises_from_the_park(shop, monkeypatch):
-    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")
-    fake_printer.STATE["object_height"] = None
-    out = bedcheck.check(config.printer("p1"))
-    assert out["steps"] == 15 and zs() >= 10
-
-
 def test_after_a_restart_xy_is_homed_to_prove_the_park_when_configured(shop, monkeypatch):
-    views = iter(["bed_not_visible", "bed_not_visible", "bed_not_visible", "bed_clear"])
-    monkeypatch.setattr(bedcheck, "judge", lambda *a: {"view": next(views), "description": "seen"})
     fake_printer.STATE.update(position=[0.0, 0.0, 0.0], file="", object_height=None)
     cfg = config.printer("p1")
-    cfg["inspect"].update(unknown_position="home_xy", rest_z=170)
+    cfg["inspect"].update(unknown_position="home_xy")
     out = bedcheck.check(cfg)
     sent = fake_printer.STATE["gcode"]
-    assert out["verdict"] == "clear" and out["steps"] == 3
+    assert out["verdict"] == "clear" and out["steps"] == 19
     assert sent[0] == "G28 X Y" and "X202 Y264" in sent[1] and sent[2].startswith("SET_KINEMATIC_POSITION")
     assert not any("G28" in g and "Z" in g[3:] for g in sent)  # Z is never homed
-    assert sent[-1] == "M84" and fake_printer.STATE["homed"] == ""  # the assumed Z is forgotten again
-
-
-def test_restart_recovery_is_bounded_by_the_assumed_height(shop, monkeypatch):
-    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_not_visible")
-    fake_printer.STATE.update(position=[0.0, 0.0, 0.0], file="", object_height=None)
-    cfg = config.printer("p1")
-    cfg["inspect"].update(unknown_position="home_xy", rest_z=170)
-    out = bedcheck.check(cfg)
-    assert out["verdict"] == "cannot_tell" and out["steps"] == 16  # 170 -> 10, never past stop_z
-    cfg["inspect"]["rest_z"] = 15  # nothing to gain: no homing, no motion
-    fake_printer.STATE.update(position=[0.0, 0.0, 0.0], homed="", gcode=[])
-    assert bedcheck.check(cfg)["steps"] == 0 and fake_printer.STATE["gcode"] == []
+    assert sent[-1] == "M84" and fake_printer.STATE["homed"] == ""  # the placeholder Z is forgotten again
 
 
 def test_object_seen_while_raising_stops_the_motion(shop, monkeypatch):
@@ -243,7 +261,7 @@ def test_object_entering_at_the_bottom_edge_gets_one_confirming_raise(shop, monk
         answers = iter(seq)
         monkeypatch.setattr(bedcheck, "judge", lambda *a: dict(zip(("view", "object_at"), next(answers)),
                                                                 description="seen", toolhead="parked"))
-        fake_printer.STATE.update(position=[202.0, 264.0, 169.7], homed="", gcode=[])
+        fake_printer.STATE.update(position=[202.0, 264.0, 169.7], homed="", gcode=[], true_z=200.0)
         return bedcheck.check(config.printer("p1"))
 
     edge, nothing = ("object", "bottom_edge"), ("bed_not_visible", "none")

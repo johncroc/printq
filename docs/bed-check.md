@@ -14,7 +14,7 @@ Starting a print onto a bed that still holds the last part drives the nozzle int
 
 ## The judge
 
-The judge is a vision model that gets one frame, the name and height of the last job printed (the object most likely to still be there), and a four-way question: `bed_clear`, `object`, `bed_not_visible`, `unsure`.
+The judge is a vision model that gets one frame, the name and height of the last job printed (the object most likely to still be there), and a five-way question: `bed_clear`, `object`, `bed_partial`, `bed_not_visible`, `unsure`.
 
 `PRINTQ_VISION_MODEL` selects it:
 
@@ -32,32 +32,36 @@ It was tried first. A 12B local vision model, asked about a frame in which the b
 
 ## Bringing the bed into view
 
-On printers where the bed moves in Z, the bed sits low after a print and the camera may see none of it. With `"inspect": {"mode": "raise_bed", ...}` printq raises the bed one step at a time and looks after each step:
+On printers where the bed moves in Z, the bed sits low after a print and the camera sees little or none of it. Near the top of its travel the camera sees the whole plate, including the corners nearest the lens. With `"inspect": {"mode": "raise_bed", ...}` printq raises the bed one step at a time, looks after each step, and judges the bed from that height.
 
-1. Take a frame and judge it.
+The rule behind it: **while the toolhead is parked clear of the bed and the camera sees nothing coming into view, one more step up is always safe.** Nothing is above a part that rises with the bed.
+
+1. Take a frame. Judge it, and measure where the bed's far edge sits in it (see [Bed height by camera](#bed-height-by-camera)).
    - `object`: verdict `occupied`. A tall part rises into view before the bed surface does, and this is where it is caught. If only its top is just entering at the bottom edge of the frame, the bed is first raised one more step (`object_confirm_steps`, default 1) for a closer look, under the same guards as any other raise. The verdict is `occupied` whatever the closer frame shows: a sighting is never overruled.
-   - `bed_clear`: stop, verdict `clear`.
+   - `bed_clear` at inspection height: verdict `clear`.
+   - `bed_clear` lower down: treated as `bed_partial`. More of the plate shows from higher up, so the bed keeps rising.
+   - `bed_partial`, `bed_not_visible`: continue, unless the bed is already at inspection height, which ends in `cannot_tell`.
    - `unsure`: stop, verdict `cannot_tell`.
-   - `bed_not_visible`: continue.
-2. If the printer has a `park_reference`, the judge must also report the toolhead as `parked` in this frame (see [Recognising the parked toolhead](#recognising-the-parked-toolhead)). Otherwise nothing moves.
-3. Before the first move, if the motors were released after the last print, establish where the toolhead is. The bed moves only once the toolhead is known to be at the park position, clear of the bed:
-   - it reads as being at `park_xy`: Klipper is told where the axes already are (`SET_KINEMATIC_POSITION`);
+2. If the printer has a `park_reference`, the judge must also report the toolhead as `parked` in this frame. Otherwise nothing moves.
+3. Before the first move, if the motors were released after the last print, establish where the toolhead is. The bed moves only once the toolhead is known to be at the park position:
+   - it reads as being at `park_xy`: Klipper is told where the axes are (`SET_KINEMATIC_POSITION`);
    - it reads as being at `also_from_xy` with X and Y homed: it is moved to the park first;
-   - Klipper has restarted and reports nothing homed, and the printer has `"unknown_position": "home_xy"`: X and Y are homed, the toolhead is parked, and Z is *assumed* to be `rest_z`, the height your end-of-print G-code leaves the bed at. When the check ends the motors are released again (`M84`) so that nothing later trusts the assumed Z;
+   - Klipper has restarted and reports nothing homed, and the printer has `"unknown_position": "home_xy"`: X and Y are homed and the toolhead is parked;
    - anything else: nothing moves.
 4. Raise the bed by `step` mm and go back to 1.
 
-Why this is safe: with the toolhead parked off the bed, nothing is above a part that rises with the bed, and a bed that is out of the camera's view is far below the gantry. While the toolhead is parked and the camera sees neither the bed nor an object, one more step is always safe. The camera decides when to stop, so neither the exact Z nor the height of the last part has to be known.
+### Bed height by camera
 
-### Z after the motors were released
+Klipper keeps reporting the last Z it knew after the motors are released. By then the bed may have sunk, or been moved by hand, in either direction, so that number is not used at all: Klipper is handed a placeholder Z to make the relative raises legal, and the motors are released again (`M84`) when the check ends so that nothing later trusts it.
 
-Klipper keeps reporting the last Z it knew after the motors are released, but a bed without motor current can sink under its own weight. A check that raised the bed, followed by an idle timeout, leaves the bed lower than the reported number says. The reported Z of an unhomed printer is therefore treated as assumed:
+The camera supplies the height instead. As the bed rises, its far edge climbs the frame, and the row of that edge is a direct reading of bed height. Two reference frames calibrate it:
 
-- it never stops the raise on its own account; the count starts from `rest_z` if that is higher than the stale number;
-- the height of the last object is not compared with it;
-- when the check ends the motors are released (`M84`), so nothing later trusts it.
+- `park_reference`: the toolhead parked, the bed out of view;
+- `clear_reference`: the empty bed at the height you want it inspected from.
 
-A bed can only sink, never climb, so the true bed is at or below where the assumed number puts it.
+Their difference is the bed, which gives its colour; the far edge in the clear reference is the row the bed is raised towards. The bed stops once its edge is within one raise of that row, and never passes it. This is ordinary image arithmetic, not a model, and it stops the raise whatever the judge says.
+
+Without both reference frames a printer whose Z is unknown is not moved. The reading depends on the plate's colour and the lighting, so new plates and moved cameras need new reference frames. Every frame's reading is saved in the dataset as `bed_row`.
 
 The limits, each of which ends the procedure with `cannot_tell`:
 
@@ -65,14 +69,13 @@ The limits, each of which ends the procedure with `cannot_tell`:
 |---|---|
 | No motion unless the toolhead is proven to be at `park_xy` by one of the three routes above | Elsewhere a rising part could meet the nozzle |
 | No motion unless the camera shows the toolhead at the park, when `park_reference` is set | Klipper's X and Y are also only what it last knew; a toolhead pushed by hand reads as parked |
-| Z never goes below `stop_z` (default 10) | Keeps the commanded move inside the axis range |
-| With Z really homed, Z never goes below the last object's height + `object_margin` | A known part keeps its top clear of the nozzle plane |
-| At most `max_steps` raises (default 20) | A judge that never sees the bed must not keep going |
+| No raise once the bed's far edge is within one raise of the reference row | The bed never goes above the height the clear reference was taken at |
+| No motion when Z is unknown and the printer lacks the two reference frames | Nothing but the judge would stop the raise at the top |
+| With Z really homed: never below `stop_z` (default 1), nor below the last object's height + `object_margin` | A Z that Klipper knows is honoured as well |
+| At most `max_steps` raises (default 26) | A bound that needs neither Z nor the camera |
 | Z is never homed | Homing drives the bed up to the nozzle, through anything on it |
 
-An unknown last object (for example after a Klipper restart) no longer prevents the raise: the park position is what makes it safe.
-
-`unknown_position: "home_xy"` is opt-in because it relies on two things about your machine: homing X and Y must not move the bed towards the nozzle (check your `homing_override`), and the bed must rest at `rest_z` or lower after every print. `home_xy_gcode` (default `G28 X Y`) sets the command.
+`unknown_position: "home_xy"` is opt-in because it relies on homing X and Y not moving the bed towards the nozzle (check your `homing_override`). `home_xy_gcode` (default `G28 X Y`) sets the command.
 
 ### `inspect` settings
 
@@ -82,13 +85,12 @@ An unknown last object (for example after a Klipper restart) no longer prevents 
   "park_xy": [202, 264],
   "also_from_xy": [187, 250],
   "step": 10,
-  "stop_z": 10,
+  "stop_z": 1,
   "object_margin": 20,
-  "max_steps": 20,
+  "max_steps": 26,
   "object_confirm_steps": 1,
   "settle_sec": 2,
   "unknown_position": "home_xy",
-  "rest_z": 170,
   "park_reference": "reference/printer-1-park.jpg",
   "clear_reference": "reference/printer-1-clear.jpg"
 }
@@ -106,11 +108,9 @@ To make a reference, park the toolhead, check the frame by eye, and copy it from
 
 ### Showing the judge the empty bed
 
-`clear_reference` names a frame from the same camera with the bed raised into view and nothing on it. The judge is shown it too, and told that this surface is the bed.
+`clear_reference` names a frame from the same camera with the bed at inspection height and nothing on it. Take it near the top of the travel, where the camera sees the whole plate. The judge is shown it beside the live frame, told that this surface is the bed, and asked to report anything on the bed that the reference does not show. It answers `bed_clear` only when the live frame shows about as much of the bed as the reference does.
 
-The reference also sets the bar for `clear`: the judge answers `bed_clear` only when the live frame shows at least as much of the bed as the reference does. Take it with the bed at the height where the camera sees the whole plate, or as much of it as it ever can; a part lying on a region the reference does not show cannot be seen in a live frame either.
-
-Without it, the rear corner of the bed entering at the bottom of the frame can be taken for a flat part rising into view, most easily when the plate is brightly coloured. That costs a false `occupied`, never a false `clear`, but it stops the queue for nothing.
+Without it, the rear corner of the bed entering at the bottom of the frame can be taken for a flat part rising into view, most easily when the plate is brightly coloured.
 
 ## Start modes
 
