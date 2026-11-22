@@ -2,6 +2,18 @@
 
 A ticket is the handoff from the design session to the queue: everything needed to print the part, written down once, at the moment the design is approved.
 
+## Start from a blank ticket
+
+```bash
+printq blank printer-1 > ticket.json    # or `printq blank` for every printer
+```
+
+The blank ticket is the current format, written by the program that validates it: every field with its empty value, and under `_help` which fields are required, what each one means, and what this installation offers (printers, their start mode, the preset sets found under each `presets_root`, and the set the printer's last job used). Fill it in, then `printq check` and `printq submit`. Keys beginning with `_` are ignored at submit, so `_help` can stay in the file.
+
+Anything that writes tickets, a person or an assistant, should start here and not from a remembered copy of the format. The format will change; the blank ticket changes with it.
+
+The job number is assigned at submit, not when the blank ticket is handed out, so an abandoned draft leaves nothing behind in the queue.
+
 ## Ticket format
 
 ```json
@@ -36,7 +48,7 @@ A ticket is the handoff from the design session to the queue: everything needed 
 | `expect` | no | Settings that must have these values in the sliced G-code, without changing anything. Use it to pin what matters about the preset set |
 | `notes` | no | Free text for the agent: what to tell the operator, what is unusual |
 
-`printq check ticket.json` validates a ticket without queueing it.
+`printq check ticket.json` validates a ticket without queueing it. A field that is not in this table is an error, so a misspelt optional field cannot be dropped silently.
 
 ## Overrides and verification
 

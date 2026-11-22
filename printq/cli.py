@@ -51,6 +51,8 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("submit", help="queue a job from a ticket JSON file").add_argument("ticket")
     sub.add_parser("check", help="validate a ticket without queueing it").add_argument("ticket")
+    bl = sub.add_parser("blank", help="print an empty ticket describing the current format and this site's choices")
+    bl.add_argument("printer", nargs="?")
     sub.add_parser("daemon", help="run the queue")
     sub.add_parser("doctor", help="check the installation")
     sub.add_parser("queue", help="list jobs")
@@ -69,6 +71,8 @@ def main() -> None:
                 print(json.dumps(jobs.validate_ticket(ticket), indent=1))
             else:
                 print(jobs.submit(ticket))
+        elif args.cmd == "blank":
+            print(json.dumps(jobs.blank(args.printer), indent=1))
         elif args.cmd == "daemon":
             daemon.main()
         elif args.cmd == "doctor":

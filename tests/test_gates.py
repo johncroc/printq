@@ -301,3 +301,31 @@ def test_override_of_unknown_setting_is_an_error(tmp_path):
         slicer.merge_overrides(tmp_path, {"no_such_setting": 1}, tmp_path)
     out = slicer.merge_overrides(tmp_path, {"nozzle_temperature": 260}, tmp_path)
     assert json.loads(out["filament"].read_text())["nozzle_temperature"] == ["260"]
+
+
+def test_a_blank_ticket_filled_in_is_a_valid_ticket(shop, tmp_path):
+    sets = tmp_path / "sets"
+    for part in slicer.PARTS:
+        (sets / "asa").mkdir(parents=True, exist_ok=True)
+        (sets / "asa" / f"{part}.json").write_text("{}")
+    (sets / "not-a-set").mkdir()
+    shop(presets_root=str(sets))
+    model = tmp_path / "part.stl"
+    model.write_text("solid")
+
+    t = jobs.blank("p1")
+    assert t["printer"] == "p1" and t["_help"]["required"] == ["title", "printer", "model", "presets"]
+    assert t["_help"]["printers"]["p1"]["preset_sets"] == ["asa"]
+    with pytest.raises(jobs.JobError, match="missing 'title'"):
+        jobs.validate_ticket(t)
+
+    t.update(title="Part", model=str(model), presets="asa")
+    job_id = jobs.submit(t)
+    saved = jobs.ticket(job_id)
+    assert "_help" not in saved and saved["copies"] == 1 and saved["presets"] == str(sets / "asa")
+    assert jobs.blank("p1")["_help"]["printers"]["p1"]["presets_of_last_job"] == str(sets / "asa")
+
+
+def test_a_misspelt_ticket_field_is_an_error(shop, tmp_path):
+    with pytest.raises(jobs.JobError, match="unknown field 'override'"):
+        jobs.validate_ticket({"title": "x", "printer": "p1", "model": "m", "presets": "p", "override": {}})

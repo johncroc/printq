@@ -43,7 +43,23 @@ TRANSITIONS = {
     "dropped": set(),
 }
 ACTIVE = ("submitted", "sliced", "queued", "bed_ok", "uploaded", "awaiting_go")
-TICKET_REQUIRED = ("title", "printer", "model", "presets")
+# The ticket format, in one place: validation, `printq blank` and the error messages all read this table.
+# name -> (required, empty value, what to put there)
+FIELDS = {
+    "title": (True, "", "Shown in every message to the operator"),
+    "printer": (True, "", "A printer name from printers.json"),
+    "model": (True, "", "Path to the exported STL, 3MF or STEP. Hashed at submit: do not change the file afterwards"),
+    "presets": (True, "", "A preset set: a directory with machine.json, process.json and filament.json. "
+                          "A relative name resolves against the printer's presets_root"),
+    "material": (False, "", "For example ASA. Checked against the filament preset and the loaded spool"),
+    "copies": (False, 1, "Number of copies to arrange on the plate"),
+    "overrides": (False, {}, "OrcaSlicer settings to change for this job only, by Orca's own setting names. "
+                             "An unknown name fails the job"),
+    "expect": (False, {}, "Settings that must have these values in the sliced G-code, without changing anything. "
+                          "Pin at least layer_height and nozzle_temperature"),
+    "notes": (False, "", "Plain sentences for the local agent: what is unusual, what to tell the operator"),
+}
+TICKET_REQUIRED = tuple(k for k, v in FIELDS.items() if v[0])
 
 
 class JobError(Exception):
@@ -108,7 +124,10 @@ def transition(job_id: str, new: str, **fields) -> dict:
 
 def validate_ticket(t: dict) -> dict:
     """Check a ticket and return a normalised copy. Raises JobError with every problem found."""
+    t = {k: v for k, v in t.items() if not k.startswith("_")}  # "_help" and the like: for the writer only
     problems = [f"missing '{k}'" for k in TICKET_REQUIRED if not t.get(k)]
+    # A misspelt optional field would otherwise be dropped without a word.
+    problems += [f"unknown field '{k}' (fields: {', '.join(FIELDS)})" for k in t if k not in FIELDS]
     if problems:
         raise JobError("ticket: " + "; ".join(problems))
     out = dict(t)
@@ -133,6 +152,42 @@ def validate_ticket(t: dict) -> dict:
                overrides=t.get("overrides", {}), expect=t.get("expect", {}),
                copies=int(t.get("copies", 1)), material=t.get("material", ""),
                notes=t.get("notes", ""))
+    return out
+
+
+def blank(printer: str | None = None) -> dict:
+    """An empty ticket with the current format and this site's choices described under "_help".
+
+    The format is described by the program, not by documentation that can fall behind it: whoever
+    writes a ticket asks for a blank one first. Keys starting with "_" are ignored at submit.
+    """
+    known = config.printers()
+    if printer is not None:
+        config.printer(printer)  # raises for an unknown name
+    last = {}
+    for job in all_jobs():
+        try:
+            last[job["printer"]] = ticket(job["id"])["presets"]
+        except (OSError, ValueError, KeyError):
+            pass
+    site = {}
+    for name in ([printer] if printer else known):
+        root = Path(known[name].get("presets_root", "")).expanduser()
+        sets = sorted(d.name for d in root.iterdir()
+                      if all((d / f"{part}.json").is_file() for part in ("machine", "process", "filament"))
+                      ) if root.is_dir() else []
+        site[name] = {"start_mode": known[name].get("start_mode", "confirm"), "presets_root": str(root),
+                      "preset_sets": sets, "presets_of_last_job": last.get(name, "")}
+    out = {k: (printer if k == "printer" and printer else v[1]) for k, v in FIELDS.items()}
+    out["_help"] = {
+        "how": "Fill in the fields above. Leave an optional field as it is, or delete it, to take the default. "
+               "Then: printq check FILE (validates, queues nothing), printq submit FILE (prints the job id). "
+               "Everything under _help is ignored. A queued ticket is never edited: drop the job and submit again.",
+        "required": list(TICKET_REQUIRED),
+        "optional": [k for k in FIELDS if k not in TICKET_REQUIRED],
+        "fields": {k: v[2] for k, v in FIELDS.items()},
+        "printers": site,
+    }
     return out
 
 

@@ -13,20 +13,22 @@ Approval has to be explicit and has to be for this version of the part. If the d
 
 1. **Export the model** the way this user's projects normally do, to its usual place. Use the exported file, not the CAD document, as `model`. The queue records the file's hash; do not touch the file afterwards.
 
-2. **Choose the preset set.** List the printer's `presets_root` (see `~/.config/printq/printers.json`). The default is the set of that printer's most recent job, unchanged. Use `overrides` only for settings you and the user agreed for this part (infill, brim, supports, wall count, layer height), with OrcaSlicer's own setting names. Put the values that matter for this part in `expect` so the queue verifies them: at least layer height and nozzle temperature.
+2. **Ask for a blank ticket:** `printq blank <printer> > ticket.json`. It is the current ticket format, with the required and optional fields explained under `_help`, plus this printer's preset sets and the set its last job used. Work from it, not from memory of an earlier ticket: the format changes.
 
-3. **Think about what the slicer cannot know.** Tall thin features with short layer times, overhangs that need supports, orientation: settle these with the user now. The ticket prints what it says.
+3. **Choose the preset set** from the ones the blank ticket lists. The default is the set of that printer's most recent job, unchanged. Use `overrides` only for settings you and the user agreed for this part (infill, brim, supports, wall count, layer height), with OrcaSlicer's own setting names. Put the values that matter for this part in `expect` so the queue verifies them: at least layer height and nozzle temperature.
 
-4. **Write the ticket** as JSON (format: `docs/tickets.md` in the printq repository) and write `notes` for the agent in plain sentences: anything unusual, and anything the user wants to be told when it is announced.
+4. **Think about what the slicer cannot know.** Tall thin features with short layer times, overhangs that need supports, orientation: settle these with the user now. The ticket prints what it says.
 
-5. **Validate, then submit:**
+5. **Fill in the ticket.** Ask the user for whatever you do not know; do not guess a required field. Write `notes` for the agent in plain sentences: anything unusual, and anything the user wants to be told when it is announced.
+
+6. **Validate, then submit:**
 
    ```bash
    printq check ticket.json     # resolves paths, confirms the preset set exists
    printq submit ticket.json    # prints the job id
    ```
 
-6. **Tell the user** the job id, the printer, and what happens next: they will get the queue message with OrcaSlicer's filament and time estimate within a couple of minutes, and the print starts according to that printer's start mode once its bed is seen clear.
+7. **Tell the user** the job id, the printer, and what happens next: they will get the queue message with OrcaSlicer's filament and time estimate within a couple of minutes, and the print starts according to that printer's start mode once its bed is seen clear.
 
 ## Afterwards
 
