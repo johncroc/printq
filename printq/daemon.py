@@ -99,7 +99,8 @@ def command(cmd: str, arg: str) -> str:
             return f"[{job_id}] noted, launching."
         if st["state"] == "queued":
             jobs.update(job_id, **vouch)
-            return f"[{job_id}] noted; it starts as soon as the printer is idle (within 10 minutes of now)."
+            return (f"[{job_id}] noted; it starts within a minute if the printer is idle, and otherwise as soon "
+                    "as it is, for the next 10 minutes.")
         return f"[{job_id}] is '{st['state']}'; /go does not apply."
     if cmd == "occupied":
         # The operator says the bed holds something. Ground truth for the last check's frames; and where
@@ -140,6 +141,24 @@ def _force_escalate(job_id: str, phase: str, result: dict) -> None:
     out = tools.escalate(job_id, f"The {phase} step stopped with the job in '{result['state']}'.{said}")
     if "refused" in out:
         notify.log(f"[{job_id}] could not escalate: {out['refused']}")
+
+
+def _launch(job_id: str) -> dict:
+    """The launch phase: look at the bed, upload, start. Three steps in a fixed order, each behind its own
+    gate, so the queue takes them itself. Handing them to the model added only ways to fail: on 2026-11-26
+    it answered three launches in a row with its tool calls written out as text and "Job started", doing
+    nothing, until the operator's /go had expired. PRINTQ_AGENT_LAUNCH=1 gives the launch back to the agent."""
+    if config.env("PRINTQ_AGENT_LAUNCH") == "1":
+        return agent.run("launch", job_id)
+    said = []
+    for step in (tools.check_bed, tools.upload_job, tools.start_job):
+        out = step(job_id)
+        said.append(f"{step.__name__}: {out.get('refused') or out.get('reason') or out.get('next') or out}")
+        if "refused" in out or out.get("verdict") in ("occupied", "cannot_tell") or out.get("started") is False:
+            break
+    state = jobs.state(job_id)["state"]
+    jobs.event(job_id, f"launch: ended in '{state}' ({'; '.join(said)[:300]})")
+    return {"state": state, "ok": True, "text": "; ".join(said)}
 
 
 RUNNING: dict[str, threading.Thread] = {}  # macro jobs this process is sending
@@ -253,7 +272,7 @@ def tick() -> None:
                     continue
                 if not moonraker.status(config.printer(job["printer"]))["idle"]:
                     continue
-                result = agent.run("launch", job["id"])
+                result = _launch(job["id"])
                 launching.add(job["printer"])
                 if result["state"] in ("bed_ok", "uploaded"):
                     jobs.transition(job["id"], "queued", reason="launch stopped half-way")

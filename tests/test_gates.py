@@ -368,7 +368,7 @@ def test_a_held_job_does_not_block_the_next_one(shop, monkeypatch):
     assert [j["id"] for j in jobs.active()] == ["j9", "j10"]
 
     launched = []
-    monkeypatch.setattr(daemon.agent, "run", lambda phase, job_id: launched.append(job_id) or {"state": "queued", "ok": True, "text": ""})
+    monkeypatch.setattr(daemon, "_launch", lambda job_id: launched.append(job_id) or {"state": "queued", "ok": True, "text": ""})
     jobs.update("j9", held=True)
     daemon.tick()
     assert launched == ["j10"]
@@ -541,14 +541,13 @@ def test_an_occupied_bed_is_looked_at_again_until_it_is_clear_then_the_job_goes(
     monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
     launches = []
 
-    def launch(phase, job_id):  # what the agent does in the launch phase, without the model
-        launches.append(job_id)
-        if tools.check_bed(job_id).get("verdict") == "clear":
-            tools.upload_job(job_id)
-            tools.start_job(job_id)
-        return {"state": jobs.state(job_id)["state"], "ok": True, "text": ""}
+    real = daemon._launch
 
-    monkeypatch.setattr(daemon.agent, "run", launch)
+    def launch(job_id):
+        launches.append(job_id)
+        return real(job_id)
+
+    monkeypatch.setattr(daemon, "_launch", launch)
     daemon.tick()
     st = jobs.state("job-1")
     assert st["state"] == "queued" and 290 < st["next_try"] - time.time() <= 300
@@ -641,3 +640,13 @@ def test_every_print_leaves_a_record_with_its_times_interventions_and_stated_out
     assert [a["what"] for a in rec["anomalies"]] == ["paused", "resumed"]
     assert rec["printer_result"] == "completed" and rec["metrics_end"] and rec["outcome"] == "partial"
     assert rec["outcome_note"] == "one corner lifted"
+
+
+def test_a_go_starts_the_job_on_the_next_pass_without_the_model(shop, monkeypatch):
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")       # the camera would say occupied
+    monkeypatch.setattr(daemon.agent, "run", lambda *a: pytest.fail("the launch must not need the agent"))
+    daemon.tick()
+    assert jobs.state("job-1")["state"] == "queued" and started() == []
+    assert "noted" in daemon.command("go", "job-1")
+    daemon.tick()
+    assert started() == ["printq_job-1.gcode"] and jobs.state("job-1")["state"] == "printing"

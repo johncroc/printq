@@ -59,6 +59,8 @@ The daemon owns the waiting; the agent only ever runs for a short, bounded task.
 
 The prompts are in [`prompts/`](../prompts). They describe the situation and the order of work; they do not carry the safety rules, because a prompt is a request and a gate is a guarantee.
 
+The launch phase is run by the daemon itself, not by the agent: `check_bed`, `upload_job`, `start_job`, in that order, stopping at the first one that refuses. The steps and their order are fixed and every decision in them is already made by a gate or by the bed judge, so a model in the loop added nothing but ways to fail. A small model will, now and then, answer with its tool calls written out as text and report success having done nothing, and a launch that silently does nothing leaves a printer idle. Setting `PRINTQ_AGENT_LAUNCH=1` hands the launch back to the agent with the tools in the table above. The prepare phase stays with the agent, and is run again when it ends without having moved the job.
+
 After a run the daemon reads the job's state. If it is not in the phase's "may end in" list, the daemon itself escalates with whatever the agent last said. A launch that ends back in `queued` (printer became busy, job held) is retried after two minutes.
 
 ## What each tool refuses
