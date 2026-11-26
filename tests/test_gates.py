@@ -250,6 +250,31 @@ def test_after_a_restart_xy_is_homed_to_prove_the_park_when_configured(shop, mon
     assert sent[-1] == "M84" and fake_printer.STATE["homed"] == ""  # the placeholder Z is forgotten again
 
 
+def test_toolhead_left_off_the_park_is_parked_first_and_then_has_to_be_seen_there(shop, monkeypatch, tmp_path):
+    ref = tmp_path / "park.jpg"
+    ref.write_bytes(b"jpeg")
+    cfg = config.printer("p1")
+    cfg["inspect"].update(unknown_position="home_xy", park_reference=str(ref))
+    fake_printer.STATE.update(position=[0.0, 0.0, 0.0], file="", object_height=None)  # Klipper restarted
+
+    def judged(parks):
+        def judge(*a):
+            moved = any("X202 Y264" in g for g in fake_printer.STATE["gcode"])
+            return {"view": "bed_not_visible", "description": "seen",
+                    "toolhead": "parked" if moved and parks else "elsewhere"}
+        return judge
+
+    monkeypatch.setattr(bedcheck, "judge", judged(parks=False))  # parked by Klipper, the camera disagrees
+    out = bedcheck.check(cfg)
+    sent = fake_printer.STATE["gcode"]
+    assert out["verdict"] == "cannot_tell" and "park" in out["reason"] and out["steps"] == 0
+    assert sent[0] == "G28 X Y" and not any("G1 Z" in g for g in sent)  # the bed never moved
+
+    fake_printer.STATE.update(position=[0.0, 0.0, 0.0], homed="", gcode=[])
+    monkeypatch.setattr(bedcheck, "judge", judged(parks=True))
+    assert bedcheck.check(cfg)["steps"] > 0  # seen parked after the move: the raise goes ahead
+
+
 def test_object_seen_while_raising_stops_the_motion(shop, monkeypatch):
     views = iter(["bed_not_visible", "bed_not_visible", "object"])
     monkeypatch.setattr(bedcheck, "judge", lambda *a: {"view": next(views), "description": "part rising into view"})

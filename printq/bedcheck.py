@@ -302,9 +302,6 @@ def check(cfg: dict, job_id: str = "") -> dict:
         # The bed is not yet at inspection height and nothing is in the way. Raise it one step, if every
         # guard allows it.
         park, plan, z = insp["park_xy"], None, pos[2]
-        if insp.get("park_reference") and toolhead != "parked":
-            return result("cannot_tell", f"the camera does not show the toolhead at its park position "
-                                         f"(it reads as '{toolhead}'), so not moving the bed")
         if not placed and "z" not in now["homed_axes"]:
             # Motors were released after the last print. The bed may be raised only once the toolhead
             # is known to be at the park position, clear of the bed. Klipper's Z is whatever it last
@@ -329,6 +326,20 @@ def check(cfg: dict, job_id: str = "") -> dict:
                                              "printer has no park_reference and clear_reference frames to "
                                              "measure it by camera, so not moving the bed")
             z = NOMINAL_Z
+        if plan in ("home", "move"):
+            # The toolhead is about to be put at the park position, so where the camera shows it now
+            # says nothing. Park it without moving the bed, then look again: the camera has to confirm
+            # the park before the first raise.
+            if plan == "home":
+                moonraker.gcode(cfg, insp.get("home_xy_gcode", "G28 X Y"))
+            moonraker.gcode(cfg, f"G90\nG1 X{park[0]} Y{park[1]} F3000\nM400")
+            moonraker.gcode(cfg, f"SET_KINEMATIC_POSITION X={park[0]} Y={park[1]} Z={NOMINAL_Z:g}")
+            assumed = placed = True
+            time.sleep(insp.get("settle_sec", 2))
+            continue
+        if insp.get("park_reference") and toolhead != "parked":
+            return result("cannot_tell", f"the camera does not show the toolhead at its park position "
+                                         f"(it reads as '{toolhead}'), so not moving the bed")
         # With the toolhead off the bed nothing is above a part that rises with it: while the camera sees
         # nothing coming, one more step is always safe. The camera decides when to stop. A Z that Klipper
         # really knows adds two limits of its own.
@@ -341,12 +352,8 @@ def check(cfg: dict, job_id: str = "") -> dict:
                 return result("cannot_tell", f"bed not judged clear at Z={z:g}; not raising it past Z={floor:g}")
         if steps >= insp.get("max_steps", 26):
             return result("cannot_tell", f"bed still not at inspection height after {steps} raises")
-        if plan == "home":
-            moonraker.gcode(cfg, insp.get("home_xy_gcode", "G28 X Y"))
         if plan:
             assumed = True
-        if plan in ("home", "move"):
-            moonraker.gcode(cfg, f"G90\nG1 X{park[0]} Y{park[1]} F3000\nM400")
         if plan or (assumed and z - step < 5):
             moonraker.gcode(cfg, f"SET_KINEMATIC_POSITION X={park[0]} Y={park[1]} Z={NOMINAL_Z:g}")
         placed = True

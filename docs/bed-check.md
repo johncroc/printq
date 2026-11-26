@@ -42,12 +42,12 @@ The rule behind it: **while the toolhead is parked clear of the bed and the came
    - `bed_clear` lower down: treated as `bed_partial`. More of the plate shows from higher up, so the bed keeps rising.
    - `bed_partial`, `bed_not_visible`: continue, unless the bed is already at inspection height, which ends in `cannot_tell`.
    - `unsure`: stop, verdict `cannot_tell`.
-2. If the printer has a `park_reference`, the judge must also report the toolhead as `parked` in this frame. Otherwise nothing moves.
-3. Before the first move, if the motors were released after the last print, establish where the toolhead is. The bed moves only once the toolhead is known to be at the park position:
+2. Before the first move, if the motors were released after the last print, establish where the toolhead is. The bed moves only once the toolhead is known to be at the park position:
    - it reads as being at `park_xy`: Klipper is told where the axes are (`SET_KINEMATIC_POSITION`);
-   - it reads as being at `also_from_xy` with X and Y homed: it is moved to the park first;
-   - Klipper has restarted and reports nothing homed, and the printer has `"unknown_position": "home_xy"`: X and Y are homed and the toolhead is parked;
+   - it reads as being at `also_from_xy` with X and Y homed: it is moved to the park, and the check goes back to 1 for a fresh frame;
+   - Klipper has restarted and reports nothing homed, and the printer has `"unknown_position": "home_xy"`: X and Y are homed, the toolhead is parked, and the check goes back to 1 for a fresh frame;
    - anything else: nothing moves.
+3. If the printer has a `park_reference`, the judge must report the toolhead as `parked` in the current frame. Otherwise the bed does not move. This comes after step 2 on purpose: a toolhead the check is about to park is not yet where the reference shows it.
 4. Raise the bed by `step` mm and go back to 1.
 
 ### Bed height by camera
