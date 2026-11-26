@@ -79,6 +79,8 @@ class Handler(BaseHTTPRequestHandler):
             STATE["gcode"].append(script)
             if script.startswith("FAIL"):  # stands for any command Klipper rejects
                 return self.reply({"error": {"code": 400, "message": "Unknown command: FAIL"}}, 400)
+            if "CANCEL=1" in script:  # the cool-down macro's own stop
+                STATE["cooldown"] = None
             for line in script.split("\n"):
                 words = {w[0]: w[1:].lstrip("=") for w in line.split()[1:]}
                 if line.startswith("G1 Z"):  # relative move, as the bed check sends it

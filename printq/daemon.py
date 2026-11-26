@@ -99,6 +99,9 @@ def command(cmd: str, arg: str) -> str:
             return f"[{job_id}] noted, launching."
         if st["state"] == "queued":
             jobs.update(job_id, **vouch)
+            ended = _end_cooldown(jobs.ticket(job_id)["printer"], job_id)
+            if ended:
+                return f"[{job_id}] noted. {ended} It starts within a minute."
             return (f"[{job_id}] noted; it starts within a minute if the printer is idle, and otherwise as soon "
                     "as it is, for the next 10 minutes.")
         return f"[{job_id}] is '{st['state']}'; /go does not apply."
@@ -115,6 +118,32 @@ def command(cmd: str, arg: str) -> str:
                     f"hold; /release_{job_id} once the bed is cleared.")
         return f"[{job_id}] recorded: the bed is occupied."
     return f"Unknown command /{cmd}. /help lists them."
+
+
+def _end_cooldown(printer: str, for_job: str) -> str:
+    """The operator vouched for the bed while the last print's cool-down is still running: the part is
+    off, so there is nothing left to cool slowly, and waiting would only let the bed go cold before it is
+    heated again. Stop the cool-down, keep the bed at the temperature it has, and let the queue go on.
+    Returns what was done, or '' when no cool-down was running."""
+    cfg = config.printer(printer)
+    macro_name = cfg.get("cooldown_macro")
+    try:
+        live = moonraker.status(cfg)
+        if not (macro_name and live.get("cooling")):
+            return ""
+        temperature, target = live["bed"]
+        moonraker.gcode(cfg, f"{macro_name} CANCEL=1")
+        keep = int(min(temperature, target) if target else 0)
+        if keep > 0:
+            moonraker.gcode(cfg, f"SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET={keep}")
+    except (moonraker.PrinterError, KeyError, TypeError, ValueError) as exc:
+        return f"The cool-down could not be stopped ({exc}); the job waits for it to end."
+    for job in jobs.all_jobs():
+        if job["printer"] == printer and job["state"] == "printing":
+            jobs.update(job["id"], cooldown_cancelled=time.time())
+            jobs.event(job["id"], f"cool-down ended early by the operator's go-ahead for {for_job}")
+            sessions.note(job["id"], "interventions", "cooldown cancelled", detail=f"go-ahead for {for_job}")
+    return f"The cool-down on {printer} is stopped and the bed is held at {keep} °C."
 
 
 def safe_command(cmd: str, arg: str) -> str:
@@ -225,6 +254,13 @@ def _watch_printing(job: dict) -> None:
             bedcheck.label_check(t["printer"], bed, "clear", "print_completed", job["id"])
         jobs.transition(job["id"], "done")
         sessions.mark(job["id"], metrics_end=True, printer_result="completed")
+        if job.get("cooldown_cancelled"):
+            # The operator took the part off and ended the cool-down: the bed is not occupied, so no
+            # "clear the bed" message and no "occupied" frame for the dataset.
+            notify.send(f"✅ [{job['id']}] {t['title']} on {t['printer']}: done; the cool-down was ended early "
+                        f"at your go-ahead.\nHow did the part come out? /success_{job['id']} "
+                        f"/partial_{job['id']} /failure_{job['id']} (kept with the print's record)")
+            return
         notify.send(f"✅ [{job['id']}] {t['title']} on {t['printer']}: print is ready to be cleared from the "
                     "build plate. The bed needs clearing before the next job.\nHow did the part come out? "
                     f"/success_{job['id']} /partial_{job['id']} /failure_{job['id']} (kept with the print's record)")

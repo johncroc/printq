@@ -650,3 +650,30 @@ def test_a_go_starts_the_job_on_the_next_pass_without_the_model(shop, monkeypatc
     assert "noted" in daemon.command("go", "job-1")
     daemon.tick()
     assert started() == ["printq_job-1.gcode"] and jobs.state("job-1")["state"] == "printing"
+
+
+def test_a_go_during_the_cool_down_ends_it_and_the_next_job_starts(shop, monkeypatch, capsys):
+    shop(cooldown_macro="STAGED_COOLDOWN")
+    tools.check_bed("job-1"), tools.upload_job("job-1"), tools.start_job("job-1")   # job-1 prints...
+    jobs.update("job-1", started=time.time() - 600)
+    nxt = config.JOBS / "job-2"                                                      # ...and job-2 waits
+    nxt.mkdir()
+    for name in ("plate_1.gcode", "ticket.json", "state.json"):
+        text = (config.JOBS / "job-1" / name).read_text()
+        (nxt / name).write_text(text.replace("job-1", "job-2") if name != "state.json" else text)
+    st = json.loads((nxt / "state.json").read_text())
+    (config.JOBS / "job-1" / "ticket.json").write_text(json.dumps({**jobs.ticket("job-1"), "submitted": "2026-01-01 00:00:00"}))
+    (nxt / "ticket.json").write_text(json.dumps({**jobs.ticket("job-2"), "submitted": "2026-01-02 00:00:00"}))
+    (nxt / "state.json").write_text(json.dumps({"state": "queued", "held": False, "updated": time.time(),
+                                                "slice_report": st["slice_report"]}))
+    fake_printer.STATE.update(state="complete", cooldown=COOLING, started=[], gcode=[])
+    daemon.tick()
+    assert jobs.state("job-1")["state"] == "printing" and jobs.state("job-2")["state"] == "queued"  # cooling: wait
+    reply = daemon.command("go", "job-2")
+    assert "cool-down" in reply and any("CANCEL=1" in g for g in fake_printer.STATE["gcode"])
+    daemon.tick()
+    daemon.tick()
+    assert jobs.state("job-1")["state"] == "done" and jobs.state("job-2")["state"] == "printing"
+    assert started() == ["printq_job-2.gcode"]
+    assert not [r for r in bedcheck.manifest() if r["label"] == "occupied"]   # the part was off: no "occupied" frame
+    assert "ended early" in capsys.readouterr().err
