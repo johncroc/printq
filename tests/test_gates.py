@@ -590,3 +590,32 @@ def test_the_timeline_says_what_a_printer_was_doing_and_why_it_was_not_printing(
     assert (t["launching"], t["bed_not_clear"], t["printing"], t["cooldown"]) == (600, 1800, 3600, 1200)
     text = utilization.report(days=1)
     assert "p1: 50.0% active over 02:00:00" in text and "waiting for the bed to be cleared: 00:30:00" in text
+
+
+def test_what_the_operator_says_about_the_bed_is_kept_as_labels_for_training(shop, monkeypatch):
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
+    assert tools.check_bed("job-1")["verdict"] == "occupied"
+    assert "recorded" in daemon.command("occupied", "job-1")          # the photo is right
+    assert not jobs.state("job-1").get("held")                         # it was waiting anyway
+    assert "noted" in daemon.command("clear", "job-1")                 # no: the bed was clear in that photo
+    rows = bedcheck.manifest()
+    checked = [r for r in rows if r["judge_view"] == "object"]
+    assert checked and all(r["label"] == "clear" and r["label_source"] == "operator" for r in checked)  # last word wins
+    assert all(r["x"] == 202.0 and r["group"].startswith("p1-") for r in checked)
+    fresh = [r for r in rows if r["judge_view"] is None]
+    assert len(fresh) == 1 and all(r["label"] == "clear" for r in fresh)  # the bed as it stood when he said so
+    assert "false alarms" in bedcheck.dataset_report() and "1 false alarms" in bedcheck.dataset_report()
+
+
+def test_go_alone_does_not_relabel_the_photo_and_occupied_stops_a_start_the_check_allowed(shop, monkeypatch):
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:object")
+    tools.check_bed("job-1")
+    daemon.command("go", "job-1")          # "I cleared it": says nothing about the earlier photo
+    assert all(r["label"] is None for r in bedcheck.manifest() if r["judge_view"] == "object")
+    jobs.update("job-1", vouched_until=0, next_try=0, waiting_bed="")
+    monkeypatch.setattr(config, "VISION_MODEL", "fixed:bed_clear")
+    assert tools.check_bed("job-1")["verdict"] == "clear"
+    assert "hold" in daemon.command("occupied", "job-1")
+    tools.upload_job("job-1")
+    assert not tools.start_job("job-1").get("started") and started() == []
+    assert "1 false clears" in bedcheck.dataset_report()

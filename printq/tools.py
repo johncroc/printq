@@ -134,7 +134,9 @@ def check_bed(job_id: str) -> dict:
                 else "the camera could not tell whether the bed is clear")
         notify.send(f"⏳ Waiting [{job_id}] {t['title']} on {t['printer']}\n{what}: {result['reason'][:500]}\n"
                     f"Looking again every {again // 60} min; it goes ahead by itself once the bed is seen clear. "
-                    f"/go_{job_id} = I checked, the bed is clear. /hold_{job_id} = stop looking.",
+                    f"/go_{job_id} = the bed is clear now. /clear_{job_id} = it was already clear in this photo "
+                    f"(recorded as the check's mistake). /occupied_{job_id} = the photo is right. "
+                    f"/hold_{job_id} = stop looking.",
                     result.get("frame"))
     jobs.update(job_id, bed=result, waiting_bed=result["verdict"], next_try=time.time() + again)
     return {"verdict": result["verdict"], "reason": result["reason"],

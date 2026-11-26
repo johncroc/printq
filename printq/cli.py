@@ -62,8 +62,12 @@ def main() -> None:
     ut.add_argument("printer", nargs="?", default="")
     for name, text in (("show", "one job's details"), ("hold", "keep a job from starting"),
                        ("release", "undo hold"), ("drop", "remove a job"), ("retry", "run the failed step again"),
-                       ("go", "you checked the bed yourself: start it")):
+                       ("go", "you checked the bed yourself: start it"),
+                       ("clear", "like go, and the last check's photo already showed a clear bed"),
+                       ("occupied", "the bed holds something: label the last check, stop a start it allowed")):
         sub.add_parser(name, help=text).add_argument("job_id")
+    ds = sub.add_parser("dataset", help="bed frames and labels collected; with a file name, write the manifest (CSV)")
+    ds.add_argument("manifest", nargs="?")
     bc = sub.add_parser("bedcheck", help="run the bed check on a printer now (may move the bed into view)")
     bc.add_argument("printer")
     args = ap.parse_args()
@@ -83,6 +87,17 @@ def main() -> None:
             sys.exit(1 if doctor() else 0)
         elif args.cmd == "bedcheck":
             print(json.dumps(bedcheck.check(config.printer(args.printer)), indent=1))
+        elif args.cmd == "dataset":
+            if args.manifest:
+                import csv
+                rows = bedcheck.manifest()
+                with open(args.manifest, "w", newline="") as f:
+                    w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["frame"])
+                    w.writeheader()
+                    w.writerows(rows)
+                print(f"{len(rows)} frames -> {args.manifest} (frame paths are relative to {config.DATASET})")
+            else:
+                print(bedcheck.dataset_report())
         elif args.cmd == "util":
             print(daemon.safe_command("util", f"{args.days} {args.printer}"))
         else:

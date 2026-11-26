@@ -34,9 +34,13 @@ def command(cmd: str, arg: str) -> str:
         days = next((float(w) for w in words if w.replace(".", "", 1).isdigit()), 1.0)
         name = next((w for w in words if w in config.printers()), None)
         return utilization.report(days, name)
+    if cmd == "dataset":
+        return bedcheck.dataset_report()
     if cmd in ("help", "start"):
         return ("/queue, /util [DAYS] [PRINTER] (share of time printing, and what the rest went on), /show ID, /hold ID, /release ID, /drop ID, /retry ID (run the step again), "
-                "/go ID (you checked the bed yourself: start it)")
+                "/go ID (you checked the bed yourself: start it), /clear ID (the same, and the bed was already "
+                "clear in the photo the check sent: recorded as the check's mistake), /occupied ID (the bed holds something: recorded for "
+                "training, and stops a start the check allowed), /dataset (bed frames and labels collected)")
     if not job_id:
         return f"/{cmd} needs a job id; /queue lists them."
     st = jobs.state(job_id)
@@ -62,12 +66,25 @@ def command(cmd: str, arg: str) -> str:
         back = "submitted" if st.get("resume") in ("submitted", "sliced") else "queued"
         jobs.transition(job_id, back, held=False, next_try=0, reason="")
         return f"[{job_id}] will run again from '{back}'."
-    if cmd == "go":
+    if cmd in ("go", "clear"):
         # The operator vouches for the bed. Recorded with a short lifetime, then the normal gates apply.
         vouch = {"vouched_until": time.time() + 600, "held": False, "next_try": 0,
                  "bed": {"verdict": "clear", "reason": "operator vouched", "time": time.time(),
                          "frame": (st.get("bed") or {}).get("frame")}}
         jobs.event(job_id, f"operator vouched for the bed (/go) while '{st['state']}'")
+        if st["state"] in ("awaiting_go", "needs_human", "queued"):
+            printer = jobs.ticket(job_id)["printer"]
+            if cmd == "clear":
+                # "It was already clear in that photo": ground truth for the frames of the last check.
+                bedcheck.label_check(printer, st.get("bed"), "clear", "operator", job_id)
+            try:  # either way the bed is clear now: a frame of it as it stands, wherever the bed is
+                cfg = config.printer(printer)
+                live = moonraker.status(cfg)["position"]
+                shot = bedcheck.record(printer, moonraker.snapshot(cfg),
+                                       {"job": job_id, "x": live[0], "y": live[1], "z": live[2]})
+                bedcheck.label(printer, "clear", "operator", frame=str(shot), job=job_id, note=f"/{cmd}")
+            except (moonraker.PrinterError, config.ConfigError):
+                pass
         if st["state"] == "awaiting_go":
             jobs.transition(job_id, "uploaded", **vouch)
             out = tools.start_job(job_id)
@@ -79,6 +96,18 @@ def command(cmd: str, arg: str) -> str:
             jobs.update(job_id, **vouch)
             return f"[{job_id}] noted; it starts as soon as the printer is idle (within 10 minutes of now)."
         return f"[{job_id}] is '{st['state']}'; /go does not apply."
+    if cmd == "occupied":
+        # The operator says the bed holds something. Ground truth for the last check's frames; and where
+        # the judge had called that bed clear, the job must not start on its word.
+        bed = st.get("bed") or {}
+        if not bedcheck.label_check(jobs.ticket(job_id)["printer"], bed, "occupied", "operator", job_id):
+            return f"[{job_id}] has no bed check to label."
+        jobs.event(job_id, "operator says the bed is occupied (/occupied)")
+        if bed.get("verdict") == "clear" and st["state"] in ("queued", "bed_ok", "uploaded", "awaiting_go"):
+            jobs.update(job_id, held=True, vouched_until=0)
+            return (f"[{job_id}] recorded: the bed was occupied and the check called it clear. The job is on "
+                    f"hold; /release_{job_id} once the bed is cleared.")
+        return f"[{job_id}] recorded: the bed is occupied."
     return f"Unknown command /{cmd}. /help lists them."
 
 
@@ -162,12 +191,18 @@ def _watch_printing(job: dict) -> None:
                         f"cooldown phase, about {live.get('cooling_min_left', '?')} min. Do not clear the bed yet.")
         return
     if finished:
+        bed = jobs.state(job["id"]).get("bed") or {}
+        if bed.get("verdict") == "clear" and bed.get("check"):
+            # It printed to the end on the bed the check called clear: weak evidence that it was.
+            bedcheck.label_check(t["printer"], bed, "clear", "print_completed", job["id"])
         jobs.transition(job["id"], "done")
         notify.send(f"✅ [{job['id']}] {t['title']} on {t['printer']}: print is ready to be cleared from the "
                     "build plate. The bed needs clearing before the next job.")
         try:  # a frame of a bed that certainly holds a part: free training data
-            bedcheck.record(t["printer"], moonraker.snapshot(cfg),
-                            {"label_hint": "occupied", "job": job["id"], "z": live["position"][2]})
+            shot = bedcheck.record(t["printer"], moonraker.snapshot(cfg),
+                                   {"label_hint": "occupied", "job": job["id"], "z": live["position"][2],
+                                    "last_file": live.get("file") or job.get("remote_file")})
+            bedcheck.label(t["printer"], "occupied", "print_end", frame=str(shot), job=job["id"])
         except moonraker.PrinterError:
             pass
     else:

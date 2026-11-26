@@ -22,6 +22,7 @@ judge, so the frames can later train a dedicated classifier
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import time
 import urllib.request
@@ -190,6 +191,17 @@ def judge(jpeg: bytes, context: str, model: str, reference: dict | None = None) 
     return judge_claude(jpeg, context, reference)
 
 
+def _refs_id(reference: dict) -> str | None:
+    """Short fingerprint of the reference frames in use. It changes when the camera is moved and the
+    references are retaken, which marks where one consistent run of frames ends."""
+    if not reference:
+        return None
+    h = hashlib.sha256()
+    for kind in sorted(reference):
+        h.update(reference[kind])
+    return h.hexdigest()[:10]
+
+
 def references(cfg: dict) -> dict:
     """The printer's reference frames, {"park": jpeg, "clear": jpeg}, for those that are configured:
     the toolhead at its park position, and the empty bed in view. A configured reference that cannot
@@ -201,6 +213,92 @@ def references(cfg: dict) -> dict:
             path = Path(name).expanduser()
             out[kind] = (path if path.is_absolute() else config.HOME / path).read_bytes()
     return out
+
+
+LABELS = ("clear", "occupied")
+# Where a label came from, strongest first. The operator looked at the bed; the machine knows a print
+# just finished on it; a print that ran to the end on a bed judged clear is only indirect evidence.
+SOURCES = ("operator", "print_end", "print_completed")
+
+
+def label(printer: str, value: str, source: str, *, check: str | None = None, frame: str | None = None,
+          job: str = "", judged: str | None = None, note: str = "") -> None:
+    """Record what the bed really was: for every frame of one bed check (`check`), or for one frame.
+    Appended to dataset/labels.jsonl; a later row for the same check or frame replaces an earlier one.
+    `judged` is the verdict the judge gave, so that its mistakes can be counted and trained on."""
+    if value not in LABELS or source not in SOURCES or not (check or frame):
+        raise ValueError(f"not a label: {value!r} from {source!r}")
+    if frame:
+        try:
+            frame = str(Path(frame).relative_to(config.DATASET))
+        except ValueError:
+            pass
+    config.DATASET.mkdir(parents=True, exist_ok=True)
+    with open(config.DATASET / "labels.jsonl", "a") as f:
+        f.write(json.dumps({"time": time.strftime("%Y%m%d-%H%M%S"), "printer": printer, "label": value,
+                            "source": source, "check": check, "frame": frame, "job": job, "judged": judged,
+                            "note": note}) + "\n")
+
+
+def label_check(printer: str, bed: dict | None, value: str, source: str, job: str = "", note: str = "") -> bool:
+    """Label the bed check a job last had (its `bed` record). False when there was no camera look to label."""
+    bed = bed or {}
+    if not (bed.get("check") or bed.get("frame")):
+        return False
+    label(printer, value, source, check=bed.get("check"), frame=bed.get("frame"), job=job,
+          judged=bed.get("judged", bed.get("verdict")), note=note)
+    return True
+
+
+def _rows(name: str) -> list[dict]:
+    path = config.DATASET / name
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+def manifest() -> list[dict]:
+    """Every saved frame with the label that applies to it (None when nobody has said). One row per frame:
+    the training package. `group` is what to split on: frames of one check are near-duplicates."""
+    by_check, by_frame = {}, {}
+    for row in _rows("labels.jsonl"):
+        if row.get("check"):
+            by_check[row["check"]] = row
+        elif row.get("frame"):
+            by_frame[row["frame"]] = row
+    out = []
+    for r in _rows("index.jsonl"):
+        lab = by_frame.get(r["frame"]) or by_check.get(r.get("check")) or {}
+        if not lab and r.get("label_hint"):  # frames saved before labels.jsonl existed
+            lab = {"label": r["label_hint"], "source": "print_end"}
+        out.append({"frame": r["frame"], "printer": r["printer"], "time": r["time"],
+                    "group": r.get("check") or r["frame"], "label": lab.get("label"),
+                    "label_source": lab.get("source"), "judge_view": r.get("view"),
+                    "judge_object_at": r.get("object_at"), "toolhead": r.get("toolhead"),
+                    "bed_row": r.get("bed_row"), "bed_target_row": r.get("bed_target"), "step": r.get("step"),
+                    "x": r.get("x"), "y": r.get("y"), "z": r.get("z"), "z_assumed": r.get("z_assumed"),
+                    "homed": r.get("homed"), "last_file": r.get("last_file"),
+                    "last_height": r.get("last_height"), "refs": r.get("refs"), "job": r.get("job"),
+                    "description": r.get("description")})
+    return out
+
+
+def dataset_report() -> str:
+    rows = manifest()
+    lines = [f"{len(rows)} frames in {config.DATASET}"]
+    for name in sorted({r["printer"] for r in rows}):
+        mine = [r for r in rows if r["printer"] == name]
+        lines.append(f"{name}: {len(mine)} frames, {len({r['group'] for r in mine})} checks")
+        for value in LABELS:
+            got = [r for r in mine if r["label"] == value]
+            by = ", ".join(f"{src} {n}" for src in SOURCES if (n := sum(r["label_source"] == src for r in got)))
+            lines.append(f"  {value}: {len(got)} frames in {len({r['group'] for r in got})} checks"
+                         + (f" ({by})" if by else ""))
+        lines.append(f"  unlabelled: {sum(r['label'] is None for r in mine)}")
+        wrong = {r["group"] for r in mine if r["label_source"] == "operator" and r["label"] == "clear"
+                 and r["judge_view"] in ("object", "unsure")}
+        missed = {r["group"] for r in mine if r["label_source"] == "operator" and r["label"] == "occupied"
+                  and r["judge_view"] == "bed_clear"}
+        lines.append(f"  judge corrected by you: {len(wrong)} false alarms, {len(missed)} false clears")
+    return "\n".join(lines)
 
 
 def look(cfg: dict, context: str, extra: dict) -> dict:
@@ -224,6 +322,7 @@ def look(cfg: dict, context: str, extra: dict) -> dict:
     object_at = verdict.get("object_at") if verdict.get("object_at") in OBJECT_AT else "higher"
     row_ = {"judge": config.VISION_MODEL, "view": view, "toolhead": toolhead if "park" in reference else None,
             "object_at": object_at if view == "object" else None, "bed_row": row,
+            "bed_target": gauge.target, "refs": _refs_id(reference),
             "description": verdict.get("description", ""), **extra}
     if config.SHADOW_VISION_MODEL:
         shadow = judge(jpeg, context, config.SHADOW_VISION_MODEL, reference)
@@ -253,7 +352,10 @@ def check(cfg: dict, job_id: str = "") -> dict:
     sighting, confirms = "", 0  # an object first seen entering at the bottom edge, and the raises spent on it
     last_row, stride = None, 0.0  # the bed's far edge in the previous frame, and how far one raise moved it
 
+    check_id = f"{cfg['name']}-{time.strftime('%Y%m%d-%H%M%S')}"  # ties this check's frames together
+
     def result(verdict: str, reason: str) -> dict:
+        judged = verdict
         if sighting and verdict == "cannot_tell":
             # An object was seen and the confirming look could not be had: the sighting stands.
             verdict, reason = "occupied", f"{sighting} (could not confirm it closer: {reason})"
@@ -261,13 +363,15 @@ def check(cfg: dict, job_id: str = "") -> dict:
             # Z was only a placeholder for the relative raises. Release the motors so Klipper forgets
             # it: nothing may later trust that number, and the next print homes properly anyway.
             moonraker.gcode(cfg, "M84")
-        return {"verdict": verdict, "reason": reason, "frame": str(frame) if frame else None, "steps": steps}
+        return {"verdict": verdict, "reason": reason, "frame": str(frame) if frame else None, "steps": steps,
+                "check": check_id, "judged": judged}
 
     while True:
         now = moonraker.status(cfg)
         pos = now["position"]
         seen = look(cfg, context, {"job": job_id, "x": pos[0], "y": pos[1], "z": pos[2],
-                                   "homed": now["homed_axes"], "last_file": st["file"], "z_assumed": assumed})
+                                   "homed": now["homed_axes"], "last_file": st["file"], "z_assumed": assumed,
+                                   "check": check_id, "step": steps, "last_height": height})
         view, description, toolhead = seen["view"], seen["description"], seen["toolhead"]
         frame = seen["frame"] or frame
 

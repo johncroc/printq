@@ -65,6 +65,9 @@ In Telegram, the id can follow an underscore so the command is one tap: `/go_j12
 | `/hold j12` | `printq hold j12` | Keep the job from launching; also stops a veto countdown |
 | `/release j12` | `printq release j12` | Undo hold |
 | `/go j12` | `printq go j12` | You checked the bed yourself: start it. See [architecture.md](architecture.md#operator-override) |
+| `/clear j12` | `printq clear j12` | Like `/go`, and the bed was already clear in the photo the check sent: kept as a label, see [training-your-own-model.md](training-your-own-model.md#labels) |
+| `/occupied j12` | `printq occupied j12` | The bed holds something: kept as a label; a job the check had allowed is put on hold |
+| `/dataset` | `printq dataset [FILE.csv]` | Bed frames and labels collected; with a file name, the training manifest |
 | `/retry j12` | `printq retry j12` | Run the step that stopped again |
 | `/drop j12` | `printq drop j12` | Remove the job |
 
