@@ -12,7 +12,7 @@ Every frame the bed check takes is saved under `$PRINTQ_DATA/dataset/<printer>/`
 {"frame": "printer-1/20261119-183807.jpg", "printer": "printer-1", "time": "20261119-183807",
  "judge": "claude-opus-5-5", "view": "bed_clear", "toolhead": "parked", "description": "...",
  "shadow": {"judge": "ollama:gemma4:12b", "view": "bed_clear"},
- "job": "j12", "z": 99.7, "last_file": "bracket.gcode"}
+ "job": "j12", "x": 202.0, "y": 264.0, "z": 99.7, "homed": "xyz", "last_file": "bracket.gcode"}
 ```
 
 Two kinds of label come for free:

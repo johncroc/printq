@@ -266,7 +266,8 @@ def check(cfg: dict, job_id: str = "") -> dict:
     while True:
         now = moonraker.status(cfg)
         pos = now["position"]
-        seen = look(cfg, context, {"job": job_id, "z": pos[2], "last_file": st["file"], "z_assumed": assumed})
+        seen = look(cfg, context, {"job": job_id, "x": pos[0], "y": pos[1], "z": pos[2],
+                                   "homed": now["homed_axes"], "last_file": st["file"], "z_assumed": assumed})
         view, description, toolhead = seen["view"], seen["description"], seen["toolhead"]
         frame = seen["frame"] or frame
 
@@ -339,7 +340,8 @@ def check(cfg: dict, job_id: str = "") -> dict:
             continue
         if insp.get("park_reference") and toolhead != "parked":
             return result("cannot_tell", f"the camera does not show the toolhead at its park position "
-                                         f"(it reads as '{toolhead}'), so not moving the bed")
+                                         f"(it reads as '{toolhead}'; Klipper has it at X{pos[0]:g} Y{pos[1]:g}, "
+                                         f"homed '{now['homed_axes']}'), so not moving the bed")
         # With the toolhead off the bed nothing is above a part that rises with it: while the camera sees
         # nothing coming, one more step is always safe. The camera decides when to stop. A Z that Klipper
         # really knows adds two limits of its own.
