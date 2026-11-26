@@ -68,6 +68,10 @@ def main() -> None:
         sub.add_parser(name, help=text).add_argument("job_id")
     ds = sub.add_parser("dataset", help="bed frames and labels collected; with a file name, write the manifest (CSV)")
     ds.add_argument("manifest", nargs="?")
+    for name in ("success", "partial", "failure"):
+        oc = sub.add_parser(name, help=f"record that a finished print came out as a {name}")
+        oc.add_argument("job_id")
+        oc.add_argument("note", nargs="*")
     bc = sub.add_parser("bedcheck", help="run the bed check on a printer now (may move the bed into view)")
     bc.add_argument("printer")
     args = ap.parse_args()
@@ -101,7 +105,7 @@ def main() -> None:
         elif args.cmd == "util":
             print(daemon.safe_command("util", f"{args.days} {args.printer}"))
         else:
-            print(daemon.safe_command(args.cmd, getattr(args, "job_id", "")))
+            print(daemon.safe_command(args.cmd, " ".join([getattr(args, "job_id", ""), *getattr(args, "note", [])])))
     except (jobs.JobError, config.ConfigError, moonraker.PrinterError, ValueError) as exc:
         sys.exit(f"printq: {exc}")
 

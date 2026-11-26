@@ -14,7 +14,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from . import bedcheck, config, jobs, moonraker, notify, slicer
+from . import bedcheck, config, jobs, moonraker, notify, slicer, sessions
 
 IDLE_HINT = "Stop here; the queue will run the launch again when the printer is idle."
 
@@ -223,6 +223,7 @@ def start_job(job_id: str) -> dict:
         return {"refused": f"printer error: {exc}"}
     # A macro job has no file to start: the queue sends its commands once the job is 'printing'.
     jobs.transition(job_id, "printing", started=time.time())
+    sessions.open_(job_id)
     notify.send(f"▶️ Started [{job_id}] {t['title']} on {t['printer']}")
     return {"started": True, "next": "launch is complete; stop here"}
 

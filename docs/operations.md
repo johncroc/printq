@@ -68,8 +68,28 @@ In Telegram, the id can follow an underscore so the command is one tap: `/go_j12
 | `/clear j12` | `printq clear j12` | Like `/go`, and the bed was already clear in the photo the check sent: kept as a label, see [training-your-own-model.md](training-your-own-model.md#labels) |
 | `/occupied j12` | `printq occupied j12` | The bed holds something: kept as a label; a job the check had allowed is put on hold |
 | `/dataset` | `printq dataset [FILE.csv]` | Bed frames and labels collected; with a file name, the training manifest |
+| `/success j12`, `/partial j12`, `/failure j12 [note]` | `printq success j12` ... | How the part came out, kept in the print's record |
 | `/retry j12` | `printq retry j12` | Run the step that stopped again |
 | `/drop j12` | `printq drop j12` | Remove the job |
+
+## Print records
+
+Every print the queue starts leaves one JSON record in `$PRINTQ_DATA/sessions/`, named `<printer>_<date>_<time>.json`. It is written at the start and completed at the end:
+
+| Field | Content |
+|---|---|
+| `session_id`, `job`, `printer`, `title` | Which print this was |
+| `filament` | Type, filament preset and, with Spoolman, the active spool |
+| `profile`, `settings`, `overrides` | The preset set and the settings the G-code was sliced with |
+| `gcode_hash`, `model_sha256`, `estimate` | Exactly what was printed, and the slicer's estimate |
+| `bed_check` | The check that let it start: its id in the bed dataset, and whether the camera or the operator gave the verdict |
+| `metrics_start`, `extrusion_end`, `metrics_end` | UTC times, for joining with temperature logs, camera frames or any other time series |
+| `printer_result` | How the printer says it ended |
+| `outcome`, `outcome_note` | `success`, `partial` or `failure`, as you judged the part. Empty until you answer the finish message |
+| `anomalies` | What happened to the print, with times: pauses, an abnormal end |
+| `interventions` | What was done to the job, with times: hold, release, go, clear, occupied, retry, drop |
+
+The printer's verdict and yours are kept apart on purpose: a print can run to the end and still be scrap.
 
 ## Utilization
 

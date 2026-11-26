@@ -619,3 +619,25 @@ def test_go_alone_does_not_relabel_the_photo_and_occupied_stops_a_start_the_chec
     tools.upload_job("job-1")
     assert not tools.start_job("job-1").get("started") and started() == []
     assert "1 false clears" in bedcheck.dataset_report()
+
+
+def test_every_print_leaves_a_record_with_its_times_interventions_and_stated_outcome(shop, monkeypatch):
+    from printq import sessions
+    daemon.command("hold", "job-1")
+    daemon.command("release", "job-1")
+    tools.check_bed("job-1"), tools.upload_job("job-1")
+    assert tools.start_job("job-1")["started"]
+    rec = sessions._load("job-1")
+    assert rec["session_id"].startswith("p1_") and rec["gcode_hash"].startswith("sha256:")
+    assert rec["bed_check"]["by"] == "camera" and rec["bed_check"]["check"].startswith("p1-")
+    assert [i["what"] for i in rec["interventions"]] == ["hold", "release"] and rec["metrics_end"] is None
+    assert "no print record" not in daemon.command("partial", "job-1 one corner lifted")
+    jobs.update("job-1", started=time.time() - 600)
+    fake_printer.STATE.update(state="paused")
+    daemon._watch_printing({**jobs.state("job-1"), "id": "job-1"})
+    fake_printer.STATE.update(state="complete")
+    daemon._watch_printing({**jobs.state("job-1"), "id": "job-1"})
+    rec = sessions._load("job-1")
+    assert [a["what"] for a in rec["anomalies"]] == ["paused", "resumed"]
+    assert rec["printer_result"] == "completed" and rec["metrics_end"] and rec["outcome"] == "partial"
+    assert rec["outcome_note"] == "one corner lifted"

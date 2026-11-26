@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 
-from . import agent, bedcheck, config, jobs, macro, moonraker, notify, tools, utilization
+from . import agent, bedcheck, config, jobs, macro, moonraker, notify, sessions, tools, utilization
 
 TICK = 10
 PREPARE_TRIES = 3  # runs of the prepare step before a job that never moved is handed to the operator
@@ -40,10 +40,15 @@ def command(cmd: str, arg: str) -> str:
         return ("/queue, /util [DAYS] [PRINTER] (share of time printing, and what the rest went on), /show ID, /hold ID, /release ID, /drop ID, /retry ID (run the step again), "
                 "/go ID (you checked the bed yourself: start it), /clear ID (the same, and the bed was already "
                 "clear in the photo the check sent: recorded as the check's mistake), /occupied ID (the bed holds something: recorded for "
-                "training, and stops a start the check allowed), /dataset (bed frames and labels collected)")
+                "training, and stops a start the check allowed), /dataset (bed frames and labels collected), "
+                "/success ID, /partial ID, /failure ID [NOTE] (how the part came out)")
     if not job_id:
         return f"/{cmd} needs a job id; /queue lists them."
     st = jobs.state(job_id)
+    if cmd in sessions.OUTCOMES:
+        return sessions.outcome(job_id, cmd, " ".join(arg.split()[1:]))
+    if cmd in ("hold", "release", "drop", "retry", "go", "clear", "occupied"):
+        sessions.note(job_id, "interventions", cmd, detail=f"while '{st['state']}'")
     if cmd == "show":
         t = jobs.ticket(job_id)
         est = (st.get("slice_report") or {}).get("estimate", {})
@@ -177,6 +182,9 @@ def _watch_printing(job: dict) -> None:
     t = jobs.ticket(job["id"])
     cfg = config.printer(t["printer"])
     live = moonraker.status(cfg)
+    if (live["state"] == "paused") != bool(job.get("paused")):
+        jobs.update(job["id"], paused=live["state"] == "paused")
+        sessions.note(job["id"], "anomalies", "paused" if live["state"] == "paused" else "resumed", by="printer")
     if live["state"] in ("printing", "paused") or time.time() - job.get("started", 0) < 90:
         return
     # Some printers clear the file at the end and report 'standby', never 'complete': ask the job history.
@@ -187,6 +195,7 @@ def _watch_printing(job: dict) -> None:
         if not job.get("cooling"):
             jobs.update(job["id"], cooling=time.time())
             jobs.event(job["id"], "extrusion complete, cooling down")
+            sessions.mark(job["id"], extrusion_end=True)
             notify.send(f"🧊 [{job['id']}] {t['title']} on {t['printer']}: print extrusion complete. Entering "
                         f"cooldown phase, about {live.get('cooling_min_left', '?')} min. Do not clear the bed yet.")
         return
@@ -196,8 +205,10 @@ def _watch_printing(job: dict) -> None:
             # It printed to the end on the bed the check called clear: weak evidence that it was.
             bedcheck.label_check(t["printer"], bed, "clear", "print_completed", job["id"])
         jobs.transition(job["id"], "done")
+        sessions.mark(job["id"], metrics_end=True, printer_result="completed")
         notify.send(f"✅ [{job['id']}] {t['title']} on {t['printer']}: print is ready to be cleared from the "
-                    "build plate. The bed needs clearing before the next job.")
+                    "build plate. The bed needs clearing before the next job.\nHow did the part come out? "
+                    f"/success_{job['id']} /partial_{job['id']} /failure_{job['id']} (kept with the print's record)")
         try:  # a frame of a bed that certainly holds a part: free training data
             shot = bedcheck.record(t["printer"], moonraker.snapshot(cfg),
                                    {"label_hint": "occupied", "job": job["id"], "z": live["position"][2],
@@ -207,6 +218,8 @@ def _watch_printing(job: dict) -> None:
             pass
     else:
         jobs.transition(job["id"], "needs_human", reason=f"print ended in printer state '{live['state']}'")
+        sessions.note(job["id"], "anomalies", f"ended in printer state '{live['state']}'", by="printer")
+        sessions.mark(job["id"], metrics_end=True, printer_result=live["state"])
         notify.send(f"⚠️ [{job['id']}] {t['title']}: the print ended in state '{live['state']}'.")
 
 

@@ -175,7 +175,8 @@ def record(printer: str, jpeg: bytes, row: dict) -> Path:
     path.write_bytes(jpeg)
     with open(config.DATASET / "index.jsonl", "a") as f:
         f.write(json.dumps({"frame": str(path.relative_to(config.DATASET)), "printer": printer,
-                            "time": stamp, **row}) + "\n")
+                            "time": stamp, "t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            **row}) + "\n")
     return path
 
 
@@ -235,7 +236,8 @@ def label(printer: str, value: str, source: str, *, check: str | None = None, fr
             pass
     config.DATASET.mkdir(parents=True, exist_ok=True)
     with open(config.DATASET / "labels.jsonl", "a") as f:
-        f.write(json.dumps({"time": time.strftime("%Y%m%d-%H%M%S"), "printer": printer, "label": value,
+        f.write(json.dumps({"time": time.strftime("%Y%m%d-%H%M%S"),
+                            "t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "printer": printer, "label": value,
                             "source": source, "check": check, "frame": frame, "job": job, "judged": judged,
                             "note": note}) + "\n")
 
@@ -269,7 +271,7 @@ def manifest() -> list[dict]:
         lab = by_frame.get(r["frame"]) or by_check.get(r.get("check")) or {}
         if not lab and r.get("label_hint"):  # frames saved before labels.jsonl existed
             lab = {"label": r["label_hint"], "source": "print_end"}
-        out.append({"frame": r["frame"], "printer": r["printer"], "time": r["time"],
+        out.append({"frame": r["frame"], "printer": r["printer"], "time": r["time"], "t": r.get("t"),
                     "group": r.get("check") or r["frame"], "label": lab.get("label"),
                     "label_source": lab.get("source"), "judge_view": r.get("view"),
                     "judge_object_at": r.get("object_at"), "toolhead": r.get("toolhead"),
