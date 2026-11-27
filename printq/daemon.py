@@ -74,7 +74,12 @@ def command(cmd: str, arg: str) -> str:
         if st["state"] != "needs_human":
             return f"[{job_id}] is '{st['state']}'; /retry is for jobs that asked for you."
         back = "submitted" if st.get("resume") in ("submitted", "sliced") else "queued"
-        jobs.transition(job_id, back, held=False, next_try=0, reason="")
+        fresh = {"held": False, "next_try": 0, "reason": ""}
+        if back == "submitted":
+            # The prepare agent reads the job first; a report left over from the
+            # failed slice makes it escalate again without slicing (j12).
+            fresh["slice_report"] = None
+        jobs.transition(job_id, back, **fresh)
         return f"[{job_id}] will run again from '{back}'."
     if cmd in ("go", "clear"):
         # The operator vouches for the bed. Recorded with a short lifetime, then the normal gates apply.
