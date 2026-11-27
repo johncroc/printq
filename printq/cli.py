@@ -54,7 +54,10 @@ def main() -> None:
     bl = sub.add_parser("blank", help="print an empty ticket describing the current format and this site's choices")
     bl.add_argument("printer", nargs="?")
     bl.add_argument("--macro", action="store_true", help="a macro job: G-code commands, nothing to slice")
+    bl.add_argument("--gcode", action="store_true", help="a job that is already sliced: a G-code file, printed as it is")
     sub.add_parser("daemon", help="run the queue")
+    sub.add_parser("desk", help="run the print desk: the page where dropped, exported and slicer-sent files "
+                                "become jobs")
     sub.add_parser("doctor", help="check the installation")
     sub.add_parser("queue", help="list jobs")
     ut = sub.add_parser("util", help="share of time each printer spent printing, and what the rest went on")
@@ -84,9 +87,12 @@ def main() -> None:
             else:
                 print(jobs.submit(ticket))
         elif args.cmd == "blank":
-            print(json.dumps(jobs.blank(args.printer, "macro" if args.macro else "print"), indent=1))
+            print(json.dumps(jobs.blank(args.printer, "macro" if args.macro else "gcode" if args.gcode else "print"), indent=1))
         elif args.cmd == "daemon":
             daemon.main()
+        elif args.cmd == "desk":
+            from . import desk
+            desk.main()
         elif args.cmd == "doctor":
             sys.exit(1 if doctor() else 0)
         elif args.cmd == "bedcheck":

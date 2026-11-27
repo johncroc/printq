@@ -93,7 +93,8 @@ def spool(cfg: dict) -> dict | None:
     except (PrinterError, ValueError, KeyError):
         return None
     fil = sp.get("filament", {})
-    return {"id": sid, "material": fil.get("material", ""), "name": fil.get("name", ""),
+    return {"id": sid, "filament_id": fil.get("id"), "material": fil.get("material", ""), "name": fil.get("name", ""),
+            "vendor": (fil.get("vendor") or {}).get("name", ""), "color_hex": fil.get("color_hex") or "",
             "remaining_g": round(sp.get("remaining_weight") or 0),
             "remaining_m": round((sp.get("remaining_length") or 0) / 1000, 1)}
 

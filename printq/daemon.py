@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 
-from . import agent, bedcheck, config, jobs, macro, moonraker, notify, sessions, tools, utilization
+from . import agent, bedcheck, config, jobs, macro, moonraker, notify, order, sessions, tools, utilization
 
 TICK = 10
 PREPARE_TRIES = 3  # runs of the prepare step before a job that never moved is handed to the operator
@@ -22,10 +22,15 @@ def command(cmd: str, arg: str) -> str:
     """Carry out one operator command and return the reply text. Shared by Telegram and the CLI."""
     job_id = arg.split()[0] if arg.split() else ""
     if cmd in ("queue", "list"):
-        rows = jobs.active() + [j for j in jobs.all_jobs() if j["state"] in ("printing", "needs_human")]
+        all_ = jobs.all_jobs()
+        rows = [j for j in all_ if j["state"] in ("printing", "needs_human")]
+        rows += [j for j in jobs.active() if j["state"] != "queued" or j.get("held")]
+        for name in config.printers():  # queued jobs in the order they will run, not the order they came in
+            rows += queue_order(name, all_)
         if not rows:
             return "The queue is empty."
         return "\n".join(f"[{j['id']}] {j['title']} on {j['printer']}: {j['state']}"
+                         + (f", {order.describe(j)}" if order.needs(j) != (None, "") else "")
                          + (" (held)" if j.get("held") else "")
                          + (f" - {j['reason']}" if j["state"] == "needs_human" and j.get("reason") else "")
                          for j in rows)
@@ -278,10 +283,59 @@ def _watch_printing(job: dict) -> None:
         notify.send(f"⚠️ [{job['id']}] {t['title']}: the print ended in state '{live['state']}'.")
 
 
+def last_printed(printer: str, all_: list[dict]) -> dict | None:
+    """The job that started most recently on this printer: what it needed is probably still loaded."""
+    ran = [j for j in all_ if j["printer"] == printer and j.get("started") and j.get("kind") != "macro"]
+    return max(ran, key=lambda j: j["started"]) if ran else None
+
+
+def queue_order(printer: str, all_: list[dict], spool="ask") -> list[dict]:
+    """The printer's queued jobs that may run, in running order (see order.py). Held jobs step aside."""
+    queued = [j for j in all_ if j["printer"] == printer and j["state"] == "queued" and not j.get("held")]
+    if spool == "ask":
+        spool = None
+        if any(order.needs(j) != (None, "") for j in queued):  # only then is the printer worth asking
+            try:
+                spool = moonraker.spool(config.printer(printer))
+            except config.ConfigError:
+                pass
+    return order.arrange(queued, spool, last_printed(printer, all_))
+
+
+def _spool_ready(job: dict, all_: list[dict]) -> bool:
+    """Before the bed is moved for a job: is the filament it asks for on the printer? If not, ask the
+    operator for the spool, once, and look again every minute. With the queue grouped by filament this is
+    asked only when nothing that is waiting can use the loaded spool."""
+    cfg = config.printer(job["printer"])
+    spool = moonraker.spool(cfg)
+    why = tools.spool_problem(job["id"], spool)
+    fid, material = order.needs(job)
+    if why is None and not isinstance(spool, dict) and fid is not None and job.get("vouched_until", 0) <= time.time():
+        # Nothing to check against. Assume the spool of the last print is still there; anything else, ask.
+        last = last_printed(job["printer"], all_)
+        if last is None or order.needs(last) != order.needs(job):
+            why = f"no spool is recorded as loaded on {job['printer']}, and the job needs {order.describe(job)}"
+    if why is None:
+        if job.get("waiting_spool"):
+            jobs.update(job["id"], waiting_spool="")
+        return True
+    if job.get("waiting_spool") != why:
+        same = sum(1 for j in all_ if j["printer"] == job["printer"] and j["state"] == "queued"
+                   and order.needs(j) == order.needs(job))
+        notify.send(f"🧵 Spool change [{job['id']}] {job['title']} on {job['printer']}\n{why}.\n"
+                    f"Load {order.describe(job)} and make it the active spool"
+                    + (f"; {same} queued jobs use it" if same > 1 else "") + ". The job goes ahead by itself once "
+                    f"it is loaded. /go_{job['id']} = print with what is loaded now. /hold_{job['id']} = let the "
+                    "next job go first.")
+        jobs.event(job["id"], f"waiting for a spool: {why}")
+    jobs.update(job["id"], waiting_spool=why, next_try=time.time() + 60)
+    return False
+
+
 def tick() -> None:
     all_ = jobs.all_jobs()
     launching = {j["printer"] for j in all_ if j["state"] in ("bed_ok", "uploaded", "awaiting_go", "printing")}
-    seen_queued = set()
+    heads: dict[str, str] = {}  # printer -> the queued job it takes next
     for job in all_:
         try:
             if job["state"] == "submitted":
@@ -300,13 +354,16 @@ def tick() -> None:
                 # a launch that died half-way; put it back rather than leave it blocking the printer
                 jobs.transition(job["id"], "queued", reason="launch did not finish")
             elif job["state"] == "queued":
-                if job.get("held"):
+                if job.get("held") or job["printer"] in launching:
                     continue  # a held job steps aside: the next one for that printer may go
-                first = job["printer"] not in seen_queued
-                seen_queued.add(job["printer"])
-                if not first or job["printer"] in launching or job.get("next_try", 0) > time.time():
+                if job["printer"] not in heads:
+                    ordered = queue_order(job["printer"], all_)
+                    heads[job["printer"]] = ordered[0]["id"] if ordered else ""
+                if heads[job["printer"]] != job["id"] or job.get("next_try", 0) > time.time():
                     continue
                 if not moonraker.status(config.printer(job["printer"]))["idle"]:
+                    continue
+                if not _spool_ready(job, all_):
                     continue
                 result = _launch(job["id"])
                 launching.add(job["printer"])

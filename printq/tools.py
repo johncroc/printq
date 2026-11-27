@@ -14,7 +14,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from . import bedcheck, config, jobs, moonraker, notify, slicer, sessions
+import shutil
+
+from . import bedcheck, config, jobs, moonraker, notify, order, slicer, sessions
 
 IDLE_HINT = "Stop here; the queue will run the launch again when the printer is idle."
 
@@ -54,6 +56,8 @@ def slice_job(job_id: str) -> dict:
         jobs.transition(job_id, "sliced", slice_report={"ok": True, "macro": True})
         return {"sliced": True, "summary": _summary(t, {}), "next": "a macro job has nothing to slice; go on to "
                 "printer_status and announce_job"}
+    if t.get("kind") == "gcode":
+        return _take_gcode(job_id, t)
     if jobs.sha256(Path(t["model"])) != t["model_sha256"]:
         return {"refused": "the model file changed after the design was approved; escalate"}
     report = slicer.slice_ticket(t, jobs.job_dir(job_id) / "slice")
@@ -64,6 +68,53 @@ def slice_job(job_id: str) -> dict:
     jobs.transition(job_id, "sliced", slice_report=report)
     return {"sliced": True, "summary": _summary(t, report), "estimate": report["estimate"],
             "settings": report["settings"], "warnings": report["warnings"]}
+
+
+def _take_gcode(job_id: str, t: dict) -> dict:
+    """A job that arrives already sliced: nothing to slice, but the same questions are asked of the file.
+    Is it the file that was submitted, does it carry the slicer's estimate, is it for this printer?"""
+    source = Path(t["file"])
+    if not source.is_file() or jobs.sha256(source) != t["file_sha256"]:
+        return {"refused": "the G-code file changed or disappeared after it was submitted; escalate"}
+    workdir = jobs.job_dir(job_id) / "slice"
+    workdir.mkdir(exist_ok=True)
+    gcode = workdir / "plate_1.gcode"
+    shutil.copyfile(source, gcode)
+    summary, used = slicer.read_gcode(gcode)
+    problems = [f"G-code has no '{f}' line (is it from OrcaSlicer?)" for f in ("filament_g", "time", "layers")
+                if f not in summary]
+    summary.setdefault("filament_mm", 0.0)
+    model = config.printer(t["printer"]).get("gcode_printer_model")
+    if model and model.lower() not in (used.get("printer_model") or "").lower():
+        problems.append(f"the file was sliced for '{used.get('printer_model')}', and {t['printer']} is a {model}")
+    sliced_for = slicer._norm(used.get("filament_type", "")).split(",")[0].split(";")[0]
+    if t.get("material") and sliced_for.upper() != t["material"].upper():
+        problems.append(f"ticket material {t['material']} but the file was sliced for {sliced_for}")
+    report = {"ok": not problems, "problems": problems, "warnings": [], "gcode": str(gcode), "estimate": summary,
+              "checked_settings": {}, "presliced": True,
+              "settings": {k: used.get(k) for k in slicer.SHOWN_SETTINGS}}
+    if problems:
+        jobs.update(job_id, slice_report=report)
+        return {"sliced": False, "problems": problems,
+                "next": "these are not fixable from here; call escalate with the problems"}
+    jobs.transition(job_id, "sliced", slice_report=report)
+    return {"sliced": True, "summary": _summary(t, report), "estimate": summary, "settings": report["settings"],
+            "warnings": [], "next": "this job arrived already sliced; go on to printer_status and announce_job"}
+
+
+def spool_problem(job_id: str, live_spool) -> str | None:
+    """Why the loaded spool does not suit the job, or None. The material must always match. The exact
+    filament must match too, unless the operator vouched with /go: then what is loaded is what they want."""
+    t, st = jobs.ticket(job_id), jobs.state(job_id)
+    fid, material = order.needs(t)
+    if isinstance(live_spool, dict):
+        have = (live_spool.get("material") or "").upper()
+        if material and have and have != material:
+            return f"loaded spool {live_spool['id']} is {live_spool['material']}, the job needs {t['material']}"
+        if fid is not None and live_spool.get("filament_id") != fid and st.get("vouched_until", 0) <= time.time():
+            return (f"loaded spool {live_spool['id']} is {live_spool.get('vendor', '')} {live_spool.get('name', '')}"
+                    f", the job needs {order.describe(t)}").replace("  ", " ")
+    return None
 
 
 def printer_status(printer: str) -> dict:
@@ -175,10 +226,7 @@ def _start_gates(job_id: str) -> str | None:
     live = moonraker.status(cfg)
     if not live["idle"]:
         return "printer is cooling down after the last print" if live.get("cooling") else f"printer is {live['state']}"
-    spool = live.get("spool")
-    if isinstance(spool, dict) and t.get("material") and spool["material"] and spool["material"].upper() != t["material"].upper():
-        return f"loaded spool {spool['id']} is {spool['material']}, the job needs {t['material']}"
-    return None
+    return spool_problem(job_id, live.get("spool"))
 
 
 def start_job(job_id: str) -> dict:

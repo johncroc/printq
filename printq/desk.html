@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Print desk</title>
+<style>
+  :root {
+    --bg: #16171C; --raised: #1D1F27; --hover: #24262F; --line: #2C2F3A;
+    --ink: #ECEAE4; --ink-2: #A7A9B4; --ink-3: #6E7180;
+    --accent: #E0B45A; --accent-ink: #16171C; --ok: #2BFF6A; --bad: #FF5A5A; --edge: rgba(255,255,255,.28);
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #F4F2EC; --raised: #FFFFFF; --hover: #FBFAF6; --line: #DED9CE;
+      --ink: #1D1F27; --ink-2: #4E515D; --ink-3: #8A8D99;
+      --accent: #B8862B; --accent-ink: #FFFFFF; --ok: #2E8B5A; --bad: #B94A4A; --edge: rgba(0,0,0,.25);
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Cantarell, "Noto Sans", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px 64px; }
+  h1 { margin: 32px 0 2px; font-size: 32px; font-weight: 650; letter-spacing: -.02em; }
+  .lede { margin: 0 0 20px; color: var(--ink-2); }
+  h2 { margin: 34px 0 12px; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+       color: var(--ink-3); display: flex; align-items: center; gap: 12px; }
+  h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  #drop { border: 2px dashed var(--line); border-radius: 16px; padding: 30px 16px; text-align: center;
+          color: var(--ink-2); background: var(--raised); transition: border-color .12s, background .12s; }
+  #drop.over { border-color: var(--accent); background: var(--hover); color: var(--ink); }
+  #drop b { color: var(--ink); font-size: 17px; display: block; margin-bottom: 2px; }
+  #drop label { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  #drop input { display: none; }
+  #msg { min-height: 22px; margin: 8px 0 0; color: var(--ink-2); font-size: 14px; }
+  #msg.bad { color: var(--bad); }
+
+  .draft { background: var(--raised); border: 1px solid var(--line); border-radius: 16px; padding: 18px;
+           margin-bottom: 16px; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+  .draft.flash { border-color: var(--accent); }
+  .draft canvas { width: 100%; aspect-ratio: 4 / 3; background: var(--bg); border-radius: 10px; display: block; }
+  .draft .pic small { display: block; color: var(--ink-3); font-size: 12px; margin-top: 6px; }
+  .draft h3 { margin: 0; font-size: 19px; font-weight: 620; word-break: break-word; }
+  .src { color: var(--ink-3); font-size: 13px; margin: 2px 0 10px; word-break: break-all; }
+  .known { border-left: 3px solid var(--accent); padding: 6px 12px; margin: 0 0 12px; background: var(--bg);
+           border-radius: 0 8px 8px 0; font-size: 14px; }
+  .known.new { border-color: var(--line); color: var(--ink-2); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0; }
+  .row[hidden] { display: none; }
+  .row > span.l { flex: 0 0 82px; color: var(--ink-3); font-size: 13px; }
+  select, input[type=number], input[type=text], textarea {
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; font: inherit; }
+  textarea { width: 100%; min-height: 74px; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  :disabled { opacity: .55; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg label { padding: 6px 12px; cursor: pointer; font-size: 14px; color: var(--ink-2); }
+  .seg label + label { border-left: 1px solid var(--line); }
+  .seg input { display: none; }
+  .seg label:has(input:checked) { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+  .sw { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--edge); display: inline-block;
+        flex: none; background: var(--c, repeating-linear-gradient(45deg, transparent 0 4px, var(--line) 4px 8px)); }
+  .pick { display: inline-flex; align-items: center; gap: 8px; background: var(--bg); color: var(--ink);
+          border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  .pick:hover { border-color: var(--accent); }
+  .pick.none { color: var(--bad); border-color: var(--bad); }
+  .palette { flex-basis: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+             background: var(--bg); max-height: 330px; overflow: auto; }
+  .palette h4 { margin: 10px 0 6px; font-size: 12px; letter-spacing: .08em; color: var(--ink-3); font-weight: 600; }
+  .palette h4:first-child { margin-top: 0; }
+  .palette h4 small { font-weight: 400; letter-spacing: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chipb { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 999px;
+           border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: inherit;
+           font-size: 13px; cursor: pointer; }
+  .chipb:hover { border-color: var(--accent); }
+  .chipb[aria-pressed=true] { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .chipb .n { color: var(--ink-3); }
+  .chipb .on { color: var(--ok); font-size: 12px; }
+  .chipb.off { opacity: .45; }
+
+  .est { font-size: 15px; margin: 12px 0 4px; }
+  .est b { font-size: 18px; }
+  .warn { color: var(--accent); font-size: 13.5px; margin: 4px 0; }
+  .prob { color: var(--bad); font-size: 13.5px; margin: 4px 0; }
+  .note { color: var(--ink-3); font-size: 13px; }
+  .acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; align-items: center; }
+  button.b { font: inherit; border-radius: 10px; padding: 9px 16px; border: 1px solid var(--line);
+             background: var(--bg); color: var(--ink); cursor: pointer; }
+  button.b:hover:not(:disabled) { border-color: var(--accent); }
+  button.go { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 650;
+              padding: 9px 26px; }
+  button.quiet { border-color: transparent; color: var(--ink-3); margin-left: auto; }
+
+  .done { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;
+          margin-bottom: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .queues { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
+  .q { background: var(--raised); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .q h3 { margin: 0 0 2px; font: 600 16px ui-monospace, Menlo, Consolas, monospace; }
+  .q .loaded { color: var(--ink-3); font-size: 13px; display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+  .q ol { list-style: none; margin: 0; padding: 0; }
+  .q li { padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; display: flex; gap: 9px; align-items: flex-start; }
+  .q li .t { flex: 1; min-width: 0; }
+  .q li .t small { display: block; color: var(--ink-3); font-size: 12.5px; }
+  .q li.change { border-top: 2px dashed var(--accent); }
+  .q li.change::before { content: none; }
+  .q .swap { color: var(--accent); font-size: 12px; display: block; }
+  .q .empty { color: var(--ink-3); font-size: 14px; padding-top: 6px; border-top: 1px solid var(--line); }
+  .st { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+  .st.printing { color: var(--ok); } .st.needs_human { color: var(--bad); }
+  footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 13px; }
+  @media (max-width: 760px) { .draft { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Print desk</h1>
+  <p class="lede">A file comes in here, you say what it prints in, and it joins the queue. Nothing prints without the Print button.</p>
+
+  <div id="drop">
+    <b>Drop an STL, 3MF or STEP file here</b>
+    or <label>choose a file<input type="file" id="file" accept=".stl,.3mf,.step,.stp,.gcode" multiple></label>.
+    <span id="doors"></span>
+  </div>
+  <p id="msg"></p>
+
+  <div id="recent"></div>
+  <h2 id="h-drafts" hidden>Waiting for you</h2>
+  <div id="drafts"></div>
+
+  <h2>Queues</h2>
+  <div class="queues" id="queues"></div>
+
+  <footer>
+    Each printer takes the jobs its loaded spool can print first, oldest first, then asks for the next spool:
+    a dashed line marks a spool change. Starting a print is still up to the queue's own checks (bed camera,
+    countdown or go-ahead).
+  </footer>
+</div>
+
+<script>
+"use strict";
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let S = null;               // last state from the server
+const UI = {};              // draft id -> the operator's choices so far
+const MESH = {};            // draft id -> parsed triangles
+const BUSY = new Set();     // draft ids being sliced or queued
+let LAST = "";              // what the cards were last drawn from
+
+async function api(path, body, raw) {
+  const opt = body === undefined ? {} : {method: "POST", headers: {"X-Printq-Desk": "1"},
+    body: raw ? body : JSON.stringify(body)};
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({error: "bad answer from the print desk"}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function say(text, bad) { const m = $("#msg"); m.textContent = text || ""; m.className = bad ? "bad" : ""; }
+
+// ---------------------------------------------------------------- choices and suggestions
+const filament = id => S.filaments.find(f => f.id === id);
+const loadedOn = id => Object.entries(S.printers).filter(([, p]) => p.spool && p.spool.filament_id === id).map(([n]) => n);
+const materialsOf = printer => new Set(S.printers[printer].preset_sets.map(s => s.material));
+const textOf = o => Object.entries(o || {}).map(([k, v]) => `${k} = ${Array.isArray(v) ? v.join(",") : v}`).join("\n");
+function parseOverrides(text) {
+  const out = {};
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i < 1) throw new Error(`"${t}" is not "setting = value"`);
+    out[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+  }
+  return out;
+}
+
+// The settings to offer: this part's own last print when it fits, else the printer's last job in that material.
+function suggestion(d, printer, material) {
+  const h = d.history, p = S.printers[printer];
+  const has = path => p.preset_sets.some(s => s.path === path);
+  if (h && h.printer === printer && has(h.presets) && (!material || !h.material || h.material.toUpperCase() === material))
+    return {presets: h.presets, overrides: h.overrides, from: "part"};
+  const last = p.last[material];
+  if (last && has(last.presets)) return {presets: last.presets, overrides: last.overrides, from: "printer", job: last.job};
+  const any = p.preset_sets.filter(s => s.material === material);
+  if (any.length) return {presets: any[any.length - 1].path, overrides: {}, from: "set"};
+  return {presets: "", overrides: {}, from: "none"};
+}
+
+function choices(d) {
+  if (UI[d.id]) return UI[d.id];
+  const names = Object.keys(S.printers), h = d.history;
+  const u = UI[d.id] = {printer: d.printer || (h && S.printers[h.printer] ? h.printer : names[0]), filament: null,
+                        copies: h ? h.copies : 1, change: false, open: false, preview: null, sliced: ""};
+  if (h && h.filament && filament(h.filament.id)) u.filament = h.filament.id;
+  else {
+    const sp = S.printers[u.printer].spool;
+    if (sp && filament(sp.filament_id) && (d.kind === "gcode" || materialsOf(u.printer).has((sp.material || "").toUpperCase())))
+      u.filament = sp.filament_id;
+  }
+  applySuggestion(d);
+  const seen = d.preview && d.preview.choice;
+  if (seen && S.printers[seen.printer]) {  // a preview was sliced before this page was (re)loaded: pick up there
+    const suggested = [u.presets, u.overridesText].join("|");
+    Object.assign(u, {printer: seen.printer, copies: seen.copies, presets: seen.presets, overridesText: textOf(seen.overrides),
+                      filament: seen.filament && filament(seen.filament.id) ? seen.filament.id : u.filament,
+                      preview: d.preview, sliced: d.preview.key});
+    u.change = [u.presets, u.overridesText].join("|") !== suggested;
+  }
+  return u;
+}
+function materialOf(d) {
+  const u = UI[d.id], f = filament(u.filament);
+  return d.kind === "gcode" ? (d.material || "").toUpperCase() : f ? f.material : "";
+}
+function applySuggestion(d) {
+  const u = UI[d.id], s = suggestion(d, u.printer, materialOf(d));
+  u.presets = s.presets; u.overridesText = textOf(s.overrides); u.from = s.from; u.fromJob = s.job || "";
+  u.change = false;
+}
+function choiceFor(d) {
+  const u = UI[d.id], f = filament(u.filament);
+  return {printer: u.printer, material: materialOf(d), filament: f ? {id: f.id, label: f.label} : {},
+          presets: u.presets, overrides: d.kind === "gcode" ? {} : parseOverrides(u.overridesText), copies: u.copies};
+}
+// The same string the desk keeps with a preview, so a reloaded page knows the preview is still current.
+const keyOf = c => JSON.stringify([c.printer, c.presets, Object.fromEntries(Object.entries(c.overrides).sort(([a], [b]) => a < b ? -1 : 1)), c.copies, c.material]);
+
+// ---------------------------------------------------------------- drafts
+function knownText(d) {
+  const h = d.history;
+  if (d.kind === "gcode") return `<div class="known new">Sliced in the slicer for ${esc(d.printer || "a printer")} and sent without Print. It prints as it is.</div>`;
+  if (!h) return `<div class="known new">Not printed through the queue before. It gets the printer's last settings for the material you pick.</div>`;
+  const how = {"same file": "This exact file", "same path": "An earlier version of this file (the geometry has changed since)",
+               "same name": "A file with this name, with different contents,"}[h.match];
+  const est = h.estimate.time ? `, ${esc(h.estimate.time)}, ${Math.round(h.estimate.filament_g)} g` : "";
+  return `<div class="known">${how} was job <b>${esc(h.job)}</b> on <b>${esc(h.printer)}</b>, ${esc(h.when)}` +
+         `${h.filament.label ? " in " + esc(h.filament.label) : h.material ? " in " + esc(h.material) : ""}${est}.</div>`;
+}
+
+function palette(d) {
+  const u = UI[d.id], ok = d.kind === "gcode" ? new Set([materialOf(d)]) : materialsOf(u.printer);
+  const groups = {};
+  for (const f of S.filaments) (groups[f.material || "?"] ||= []).push(f);
+  const names = Object.keys(groups).sort((a, b) => (ok.has(b) - ok.has(a)) || a.localeCompare(b));
+  return `<div class="palette">` + names.map(m => {
+    const usable = ok.has(m);
+    return `<h4>${esc(m)}${usable ? "" : ` <small>no ${esc(u.printer)} settings for this material yet: slice it in OrcaSlicer once</small>`}</h4><div class="chips">` +
+      groups[m].map(f => {
+        const on = loadedOn(f.id);
+        return `<button type="button" class="chipb${usable ? "" : " off"}" data-fil="${f.id}" ${usable ? "" : "disabled"} aria-pressed="${u.filament === f.id}">` +
+          `<span class="sw" ${f.color_hex ? `style="--c:#${esc(f.color_hex)}"` : ""}></span>${esc(f.label)} <span class="n">${f.spools}</span>` +
+          (on.length ? `<span class="on">loaded on ${esc(on.join(", "))}</span>` : "") + `</button>`;
+      }).join("") + `</div>`;
+  }).join("") + `</div>`;
+}
+
+function draftHtml(d) {
+  const u = choices(d), p = S.printers[u.printer], f = filament(u.filament), busy = BUSY.has(d.id);
+  const sets = p.preset_sets.filter(s => !materialOf(d) || s.material === materialOf(d));
+  let current = false, problem = "";
+  try { current = u.preview && u.preview.ok && u.sliced === keyOf(choiceFor(d)); } catch (e) { problem = e.message; }
+  const src = {upload: "Dropped here", export: "Exported", slicer: "Sent from the slicer"}[d.source] || d.source;
+  const fromText = {part: "the settings this part printed with last time", printer: `the settings of ${esc(u.printer)}'s last job in this material (${esc(u.fromJob)})`,
+                    set: "a settings set for this material (this printer has no queue job in it yet)", none: ""}[u.from];
+  let settings = "";
+  if (d.kind === "print") {
+    settings = !f ? `<p class="note">Pick a filament to see the settings.</p>`
+      : !u.presets ? `<p class="prob">${esc(u.printer)} has no settings for ${esc(materialOf(d))} yet. Open it in OrcaSlicer, or pick another printer or material.</p>`
+      : `<div class="row"><span class="l">Settings</span><span>Using ${fromText}.</span></div>
+         <div class="row"><span class="l">${d.history ? "Any changes?" : "Change?"}</span>
+           <span class="seg"><label><input type="radio" name="chg-${d.id}" value="0" ${u.change ? "" : "checked"}>No, print it the same</label>
+           <label><input type="radio" name="chg-${d.id}" value="1" ${u.change ? "checked" : ""}>Yes, change settings</label></span></div>
+         <div class="row" ${u.change ? "" : "hidden"}><span class="l">Settings set</span>
+           <select data-f="presets">${sets.map(s => `<option value="${esc(s.path)}" ${s.path === u.presets ? "selected" : ""}>${esc(s.name)} (${esc(s.layer_height)} mm, ${esc(s.nozzle)} °C)</option>`).join("")}</select></div>
+         <div class="row" ${u.change || u.overridesText ? "" : "hidden"}><span class="l">Changes</span>
+           <textarea data-f="overridesText" ${u.change ? "" : "disabled"} spellcheck="false" placeholder="one per line, by OrcaSlicer's own names, for example:&#10;sparse_infill_density = 25%&#10;brim_type = outer_only">${esc(u.overridesText)}</textarea></div>`;
+  }
+  const pv = d.kind === "gcode" ? {ok: true, estimate: d.estimate || {}, warnings: [], problems: []} : u.preview;
+  const e = pv && pv.estimate || {};
+  const est = pv && (current || d.kind === "gcode") && e.time
+    ? `<p class="est">OrcaSlicer's estimate: <b>${esc(e.time)}</b>, <b>${(+e.filament_g).toFixed(1)} g</b>` +
+      `${e.filament_mm ? ` (${(e.filament_mm / 1000).toFixed(2)} m)` : ""}, ${esc(e.layers)} layers${e.height_mm ? `, ${e.height_mm} mm tall` : ""}.</p>` : "";
+  const spoolNote = f && !loadedOn(f.id).includes(u.printer)
+    ? `<p class="note">${esc(f.label)} is not the spool loaded on ${esc(u.printer)}. The job will wait, and the queue will ask for the spool when its turn comes.</p>` : "";
+  const ready = d.kind === "gcode" ? true : current;
+  return `<article class="draft" id="${d.id}" data-id="${d.id}">
+    <div class="pic">${d.kind === "print" && /\.stl$/i.test(d.name) ? `<canvas width="600" height="450"></canvas><small>As exported, in the orientation it will print. Supports and brim are not drawn.</small>`
+        : `<canvas width="600" height="450" hidden></canvas><small>No picture for this file type.</small>`}</div>
+    <div>
+      <h3>${esc(d.name)}</h3>
+      <div class="src">${src} ${esc(d.created)}${d.source === "export" ? " · " + esc(d.path) : ""}</div>
+      ${knownText(d)}
+      <div class="row"><span class="l">Printer</span>
+        <select data-f="printer" ${d.kind === "gcode" ? "disabled" : ""}>${Object.keys(S.printers).map(n => `<option ${n === u.printer ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        ${d.kind === "print" ? `<span class="l" style="flex-basis:auto">Copies</span><input type="number" data-f="copies" min="1" max="99" value="${u.copies}" style="width:76px">` : ""}</div>
+      <div class="row"><span class="l">Filament</span>
+        <button type="button" class="pick${f ? "" : " none"}" data-act="palette"><span class="sw" ${f && f.color_hex ? `style="--c:#${esc(f.color_hex)}"` : ""}></span>
+          ${f ? `${esc(f.label)} · ${esc(f.material)}` : d.kind === "gcode" ? `Any ${esc(materialOf(d))} spool (pick one to hold it for a colour)` : "Pick a colour and material"}</button>
+        ${u.open ? palette(d) : ""}</div>
+      ${settings}
+      ${problem ? `<p class="prob">${esc(problem)}</p>` : ""}
+      ${est}
+      ${pv && current ? pv.warnings.map(w => `<p class="warn">OrcaSlicer warns: ${esc(w)}</p>`).join("") : ""}
+      ${u.preview && !u.preview.ok && u.sliced === (() => { try { return keyOf(choiceFor(d)); } catch { return ""; } })() ? u.preview.problems.map(x => `<p class="prob">${esc(x)}</p>`).join("") : ""}
+      ${u.error ? `<p class="prob">${esc(u.error)}</p>` : ""}
+      ${ready ? spoolNote : ""}
+      <div class="acts">
+        ${d.kind === "print" ? `<button type="button" class="b" data-act="preview" ${busy || !f || !u.presets ? "disabled" : ""}>${busy ? "Slicing…" : current ? "Slice again" : "Slice a preview"}</button>` : ""}
+        <button type="button" class="b go" data-act="print" ${ready && !busy && (f || d.kind === "gcode") ? "" : "disabled"} title="Mouse or touch only: the keyboard cannot press this">Print</button>
+        ${p.orca_gui && d.kind === "print" ? `<button type="button" class="b" data-act="slicer">Open in OrcaSlicer instead</button>` : ""}
+        <button type="button" class="b quiet" data-act="discard">Not printing this</button>
+      </div>
+      ${d.kind === "print" && !ready ? `<p class="note">Print unlocks after a preview slice with these settings.</p>` : ""}
+    </div></article>`;
+}
+
+function render() {
+  if (!S) return;
+  const active = document.activeElement, typing = active && ["TEXTAREA", "INPUT", "SELECT"].includes(active.tagName) && active.closest(".draft");
+  if (typing) return renderQueues();  // do not pull a field out from under the operator
+  $("#h-drafts").hidden = !S.drafts.length;
+  $("#drafts").innerHTML = S.drafts.map(draftHtml).join("");
+  for (const d of S.drafts) drawDraft(d);
+  $("#recent").innerHTML = S.queued.map(q => `<div class="done">✅ <b>${esc(q.name)}</b> is in the queue as <b>${esc(q.job)}</b>.` +
+    `<button type="button" class="b quiet" data-drop="${esc(q.job)}">Take it back out</button></div>`).join("");
+  $("#doors").textContent = (S.watching ? ` Exports into ${S.watching} appear here by themselves.` : "") +
+    (S.slicer_door ? " OrcaSlicer's Print button queues straight away." : "");
+  renderQueues();
+}
+
+function renderQueues() {
+  $("#queues").innerHTML = Object.entries(S.queue).map(([name, rows]) => {
+    const sp = S.printers[name].spool;
+    let prev = sp ? `${sp.filament_id}` : null, out = "";
+    for (const j of rows) {
+      const want = j.filament_id != null ? `${j.filament_id}` : null;
+      const change = j.state === "queued" && !j.held && want && prev && want !== prev;
+      if (want && j.state === "queued" && !j.held) prev = want;
+      const f = filament(j.filament_id);
+      out += `<li class="${change ? "change" : ""}"><span class="sw" ${f && f.color_hex ? `style="--c:#${esc(f.color_hex)}"` : ""}></span>
+        <span class="t">${change ? `<span class="swap">spool change</span>` : ""}<b>${esc(j.id)}</b> ${esc(j.title)}
+        <small>${esc(j.wants || (j.kind === "macro" ? "macro job" : "any filament"))}${j.time ? " · " + esc(j.time) : ""}${j.waiting ? " · waiting: " + esc(j.waiting).slice(0, 90) : ""}</small></span>
+        <span class="st ${esc(j.state)}">${j.held ? "held" : esc(j.state.replace("_", " "))}</span></li>`;
+    }
+    return `<div class="q"><h3>${esc(name)}</h3><div class="loaded">${sp ? `<span class="sw" ${sp.color_hex ? `style="--c:#${esc(sp.color_hex)}"` : ""}></span>loaded: ${esc(sp.vendor)} ${esc(sp.name)}, ${sp.remaining_g} g left`
+      : "no spool recorded as loaded"}</div>${rows.length ? `<ol>${out}</ol>` : `<div class="empty">Nothing queued.</div>`}</div>`;
+  }).join("");
+}
+
+// ---------------------------------------------------------------- events
+document.addEventListener("change", ev => {
+  const card = ev.target.closest(".draft"); if (!card) return;
+  const d = S.drafts.find(x => x.id === card.dataset.id), u = UI[d.id], f = ev.target.dataset.f;
+  u.error = "";
+  if (ev.target.name === "chg-" + d.id) { u.change = ev.target.value === "1"; if (!u.change) applySuggestion(d); }
+  else if (f === "printer") {
+    u.printer = ev.target.value;
+    const fil = filament(u.filament);
+    if (fil && !materialsOf(u.printer).has(fil.material)) u.filament = null;
+    applySuggestion(d);
+  }
+  else if (f === "presets") u.presets = ev.target.value;
+  else return;  // text and number fields are followed as they are typed, below
+  document.activeElement.blur();
+  render();
+});
+
+// Typed fields update the choices without redrawing the card: a redraw on leaving the field would swallow
+// the click that made the operator leave it.
+document.addEventListener("input", ev => {
+  const card = ev.target.closest(".draft"), f = ev.target.dataset.f; if (!card || !UI[card.dataset.id]) return;
+  const u = UI[card.dataset.id];
+  if (f === "copies") u.copies = Math.max(1, Math.min(99, parseInt(ev.target.value, 10) || 1));
+  else if (f === "overridesText") u.overridesText = ev.target.value;
+  else return;
+  const go = $("[data-act=print]", card); if (go && S.drafts.find(x => x.id === card.dataset.id).kind === "print") go.disabled = true;
+});
+
+document.addEventListener("click", async ev => {
+  const drop = ev.target.closest("[data-drop]");
+  if (drop) { await api(`/api/job/${drop.dataset.drop}/drop`, {}).then(r => say(r.said), e => say(e.message, true)); return refresh(); }
+  const card = ev.target.closest(".draft"); if (!card) return;
+  const d = S.drafts.find(x => x.id === card.dataset.id), u = UI[d.id];
+  const chip = ev.target.closest("[data-fil]");
+  if (chip) { u.filament = +chip.dataset.fil; u.open = false; u.error = ""; if (d.kind === "print") applySuggestion(d); return render(); }
+  const act = (ev.target.closest("[data-act]") || {dataset: {}}).dataset.act;
+  if (!act) return;
+  u.error = "";
+  try {
+    if (act === "palette") { u.open = !u.open; return render(); }
+    if (act === "discard") { await api(`/api/draft/${d.id}/discard`, {}); delete UI[d.id]; return refresh(); }
+    if (act === "slicer") { await api(`/api/draft/${d.id}/slicer`, {printer: u.printer}); return say(`Opening ${d.name} in OrcaSlicer for ${u.printer}. Print from there and it joins the queue.`); }
+    const choice = choiceFor(d);
+    if (act === "preview") {
+      BUSY.add(d.id); render();
+      try { u.preview = await api(`/api/draft/${d.id}/preview`, choice); u.sliced = keyOf(choice); }
+      finally { BUSY.delete(d.id); }
+      return render();
+    }
+    if (act === "print") {
+      // A key press reaches a button as a click with no pointer behind it. Starting a job takes a pointer.
+      if (ev.detail === 0 || !ev.isTrusted) return say("Print needs a mouse click or a tap, not the keyboard.", true);
+      BUSY.add(d.id); render();
+      try { const r = await api(`/api/draft/${d.id}/print`, choice); say(`${d.name} is in the queue as ${r.job}.`); delete UI[d.id]; }
+      finally { BUSY.delete(d.id); }
+      return refresh();
+    }
+  } catch (e) { u.error = e.message; render(); }
+});
+
+const dropEl = $("#drop");
+for (const t of ["dragenter", "dragover"]) dropEl.addEventListener(t, e => { e.preventDefault(); dropEl.classList.add("over"); });
+for (const t of ["dragleave", "drop"]) dropEl.addEventListener(t, e => { e.preventDefault(); dropEl.classList.remove("over"); });
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => e.preventDefault());
+dropEl.addEventListener("drop", e => upload(e.dataTransfer.files));
+$("#file").addEventListener("change", e => { upload(e.target.files); e.target.value = ""; });
+async function upload(files) {
+  for (const file of files) {
+    say(`Receiving ${file.name}…`);
+    try { await api("/api/upload?name=" + encodeURIComponent(file.name), file, true); say(`${file.name} received.`); }
+    catch (e) { say(`${file.name}: ${e.message}`, true); }
+  }
+  refresh();
+}
+
+// ---------------------------------------------------------------- the picture of the part
+async function drawDraft(d) {
+  const canvas = $(`#${d.id} canvas`);
+  if (!canvas || canvas.hidden) return;
+  if (!MESH[d.id]) {
+    MESH[d.id] = "loading";
+    try { MESH[d.id] = parseStl(await (await fetch(`/api/draft/${d.id}/file`)).arrayBuffer()); }
+    catch { MESH[d.id] = null; }
+    return drawDraft(d);
+  }
+  if (MESH[d.id] === "loading") return;
+  const f = filament((UI[d.id] || {}).filament);
+  paint($(`#${d.id} canvas`), MESH[d.id], f && f.color_hex ? f.color_hex : "9aa0aa");
+}
+
+function parseStl(buf) {
+  const dv = new DataView(buf), n = buf.byteLength >= 84 ? dv.getUint32(80, true) : 0;
+  if (buf.byteLength === 84 + n * 50 && n > 0) {
+    const tri = new Float32Array(n * 9);
+    for (let i = 0; i < n; i++) for (let k = 0; k < 9; k++) tri[i * 9 + k] = dv.getFloat32(84 + i * 50 + 12 + k * 4, true);
+    return tri;
+  }
+  const nums = [], re = /vertex\s+(\S+)\s+(\S+)\s+(\S+)/g, text = new TextDecoder().decode(buf);
+  for (let m; (m = re.exec(text));) nums.push(+m[1], +m[2], +m[3]);
+  return new Float32Array(nums);
+}
+
+function paint(canvas, tri, hex) {
+  const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!tri || !tri.length) return;
+  const count = tri.length / 9, step = Math.max(1, Math.ceil(count / 120000));
+  const a = -Math.PI / 4, b = Math.PI / 5.2, ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+  // Z is up. Turn about Z, then tip toward the viewer: x right, y up the screen, depth into it.
+  const view = (x, y, z) => { const X = x * ca - y * sa, Y = x * sa + y * ca; return [X, Y * sb + z * cb, Y * cb - z * sb]; };
+  const faces = []; let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (let i = 0; i < count; i += step) {
+    const p = [0, 3, 6].map(k => view(tri[i * 9 + k], tri[i * 9 + k + 1], tri[i * 9 + k + 2]));
+    const ux = p[1][0] - p[0][0], uy = p[1][1] - p[0][1], uz = p[1][2] - p[0][2];
+    const vx = p[2][0] - p[0][0], vy = p[2][1] - p[0][1], vz = p[2][2] - p[0][2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz) || 1; nx /= len; ny /= len; nz /= len;
+    if (nz > 0.02 && step === 1) continue;   // faces pointing away from the viewer
+    for (const q of p) { x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); }
+    faces.push([p, (p[0][2] + p[1][2] + p[2][2]) / 3, Math.max(0, -(nx * 0.35 + ny * -0.55 + nz * 0.75))]);
+  }
+  faces.sort((f, g) => g[1] - f[1]);
+  const s = Math.min((W - 40) / (x1 - x0 || 1), (H - 40) / (y1 - y0 || 1));
+  const ox = (W - (x1 - x0) * s) / 2 - x0 * s, oy = (H + (y1 - y0) * s) / 2 + y0 * s;
+  const rgb = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const lift = Math.max(0, 70 - Math.max(...rgb));  // a black part still needs visible faces
+  for (const [p, , light] of faces) {
+    const k = 0.42 + 0.58 * light;
+    ctx.fillStyle = ctx.strokeStyle = `rgb(${rgb.map(c => Math.round(Math.min(255, (c + lift) * k + lift * light))).join(",")})`;
+    ctx.beginPath(); ctx.moveTo(ox + p[0][0] * s, oy - p[0][1] * s);
+    ctx.lineTo(ox + p[1][0] * s, oy - p[1][1] * s); ctx.lineTo(ox + p[2][0] * s, oy - p[2][1] * s);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+}
+
+// ---------------------------------------------------------------- keep current
+async function refresh() {
+  try {
+    const before = S ? new Set(S.drafts.map(d => d.id)) : null;
+    S = await api("/api/state");
+    const key = JSON.stringify([S.drafts, S.printers, S.filaments, S.queued, S.slicer_door]);
+    if (key !== LAST) { LAST = key; render(); } else renderQueues();
+    const fresh = before ? S.drafts.filter(d => !before.has(d.id)) : [];
+    const target = fresh.length ? fresh[fresh.length - 1].id : (!before && location.hash.slice(1));
+    if (target && $("#" + CSS.escape(target))) {
+      const el = $("#" + CSS.escape(target)); el.classList.add("flash"); el.scrollIntoView({behavior: "smooth", block: "center"});
+      if (fresh.length) document.title = `(${S.drafts.length}) Print desk`;
+    }
+    if (!S.drafts.length) document.title = "Print desk";
+  } catch (e) { say("The print desk is not answering: " + e.message, true); }
+}
+refresh();
+setInterval(() => { if (!BUSY.size) refresh(); }, 4000);
+</script>
+</body>
+</html>

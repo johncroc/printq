@@ -45,17 +45,26 @@ TRANSITIONS = {
 ACTIVE = ("submitted", "sliced", "queued", "bed_ok", "uploaded", "awaiting_go")
 # The ticket format, in one place: validation, `printq blank` and the error messages all read this table.
 # name -> (kinds it belongs to, required, empty value, what to put there)
-KINDS = ("print", "macro")
+KINDS = ("print", "macro", "gcode")
+SLICED = ("print", "gcode")  # kinds that end in a G-code file and use filament
 FIELDS = {
-    "kind": (KINDS, False, "print", "'print' slices a model and prints it. 'macro' runs G-code commands or macros "
-                                    "on the printer (a calibration, a PID tune) with nothing to slice"),
+    "kind": (KINDS, False, "print", "'print' slices a model and prints it. 'gcode' prints a G-code file that is "
+                                    "already sliced (sent from the slicer's own window). 'macro' runs G-code "
+                                    "commands or macros on the printer (a calibration, a PID tune) with nothing "
+                                    "to slice"),
     "title": (KINDS, True, "", "Shown in every message to the operator"),
     "printer": (KINDS, True, "", "A printer name from printers.json"),
     "model": (("print",), True, "", "Path to the exported STL, 3MF or STEP. Hashed at submit: do not change the "
                                     "file afterwards"),
     "presets": (("print",), True, "", "A preset set: a directory with machine.json, process.json and filament.json. "
                                       "A relative name resolves against the printer's presets_root"),
-    "material": (("print",), False, "", "For example ASA. Checked against the filament preset and the loaded spool"),
+    "file": (("gcode",), True, "", "Path to the sliced G-code file. Hashed at submit: do not change the file "
+                                   "afterwards. Printed as it is; nothing is sliced again"),
+    "material": (SLICED, False, "", "For example ASA. Checked against the filament preset and the loaded spool"),
+    "filament": (SLICED, False, {}, "The exact filament to print with, as Spoolman knows it: {\"id\": Spoolman "
+                                    "filament id, \"label\": \"Polymaker PolyLite ASA Black\"}. The job waits "
+                                    "until a spool of it is loaded, and the queue groups jobs by it so that "
+                                    "spools are changed as seldom as possible. Empty: any spool of the material"),
     "copies": (("print",), False, 1, "Number of copies to arrange on the plate"),
     "overrides": (("print",), False, {}, "OrcaSlicer settings to change for this job only, by Orca's own setting "
                                          "names. An unknown name fails the job"),
@@ -171,6 +180,18 @@ def validate_ticket(t: dict) -> dict:
         if problems:
             raise JobError("ticket: " + "; ".join(problems))
         return out
+    fil = out.get("filament") or {}
+    if not isinstance(fil, dict) or (fil and not (isinstance(fil.get("id"), int) and not isinstance(fil.get("id"), bool))):
+        raise JobError("ticket: 'filament' must be an object with the Spoolman filament id, {\"id\": 12, \"label\": \"...\"}")
+    out["filament"] = {"id": fil["id"], "label": str(fil.get("label", ""))[:120]} if fil else {}
+    if kind == "gcode":
+        path = Path(t["file"]).expanduser()
+        if not path.is_file():
+            raise JobError(f"ticket: G-code file not found: {path}")
+        if path.suffix.lower() not in (".gcode", ".gco", ".g"):
+            raise JobError(f"ticket: not a G-code file: {path.name}")
+        out.update(file=str(path), file_sha256=sha256(path))
+        return out
     cfg = config.printer(t["printer"])
     model = Path(t["model"]).expanduser()
     if not model.is_file():
@@ -224,7 +245,7 @@ def blank(printer: str | None = None, kind: str = "print") -> dict:
     out["kind"] = kind
     if printer:
         out["printer"] = printer
-    other = "printq blank --macro" if kind == "print" else "printq blank"
+    other = "printq blank --macro" if kind != "macro" else "printq blank"
     out["_help"] = {
         "how": "Fill in the fields above. Leave an optional field as it is, or delete it, to take the default. "
                "Then: printq check FILE (validates, queues nothing), printq submit FILE (prints the job id). "
@@ -267,7 +288,8 @@ def all_jobs() -> list[dict]:
         except (OSError, ValueError):
             continue
         out.append({"id": path.name, "title": t["title"], "printer": t["printer"], "kind": t.get("kind", "print"),
-                    "submitted": t.get("submitted", ""), **s})
+                    "submitted": t.get("submitted", ""), "material": t.get("material", ""),
+                    "filament": t.get("filament") or {}, **s})
     # Order of submission. Not the directory's timestamps: those move every time a file is added to a job.
     digits = lambda j: int(re.sub(r"\D", "", j["id"]) or 0)  # noqa: E731
     return sorted(out, key=lambda j: (j["submitted"], digits(j), j["id"]))
@@ -275,3 +297,27 @@ def all_jobs() -> list[dict]:
 
 def active(printer: str | None = None) -> list[dict]:
     return [j for j in all_jobs() if j["state"] in ACTIVE and (printer is None or j["printer"] == printer)]
+
+
+def last_print_of(sha: str = "", path: str = "", name: str = "") -> dict | None:
+    """The most recent print job of this model: the same contents first, and failing that the same path or
+    file name (a new revision of a part that was printed before). Returns {"ticket", "state", "match"}, where
+    match is 'same file', 'same path' or 'same name'; None when the model has not been through the queue."""
+    found = {}
+    for job in all_jobs():
+        try:
+            t = ticket(job["id"])
+        except (OSError, ValueError, JobError):
+            continue
+        if t.get("kind", "print") != "print" or job["state"] == "dropped":
+            continue
+        if sha and t.get("model_sha256") == sha:
+            found["same file"] = (t, job)
+        elif path and t.get("model") == path:
+            found["same path"] = (t, job)
+        elif name and Path(t.get("model", "")).name == name:
+            found["same name"] = (t, job)
+    for match in ("same file", "same path", "same name"):
+        if match in found:
+            return {"ticket": found[match][0], "state": found[match][1], "match": match}
+    return None
