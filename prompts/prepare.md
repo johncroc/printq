@@ -9,6 +9,8 @@ Work through the printq tools:
 
 Some jobs are macro jobs (the ticket says `"kind": "macro"`): they run commands on the printer, such as a calibration, and have no model. The steps are the same. `slice_job` will tell you there is nothing to slice; carry on to steps 3 and 4.
 
+Some jobs arrive already sliced (`"kind": "gcode"`): the owner sliced them in the slicer's own window. The steps are the same. `slice_job` checks the file instead of slicing; carry on to steps 3 and 4.
+
 Then stop and reply with one line saying what you did.
 
 If a tool refuses, read its reason: it tells you what state the job is in and what is allowed. Do not retry the same call hoping for a different answer. If you cannot get the job to the announced state, call `escalate` with a plain account of what happened, then stop.

@@ -30,6 +30,12 @@ HEADER = {
 }
 
 
+SHOWN_SETTINGS = (
+    "printer_settings_id", "print_settings_id", "filament_settings_id", "filament_type", "layer_height",
+    "nozzle_temperature", "hot_plate_temp", "textured_plate_temp", "curr_bed_type",
+    "chamber_temperatures", "sparse_infill_density", "wall_loops", "enable_support", "brim_type")
+
+
 def _norm(value) -> str:
     """One comparable string for a preset value and for its CONFIG_BLOCK text."""
     if isinstance(value, list):
@@ -135,8 +141,5 @@ def slice_ticket(ticket: dict, workdir: Path) -> dict:
     return {
         "ok": not problems, "problems": problems, "warnings": warnings, "gcode": str(gcode),
         "estimate": summary, "checked_settings": checked,
-        "settings": {k: used.get(k) for k in (
-            "printer_settings_id", "print_settings_id", "filament_settings_id", "filament_type", "layer_height",
-            "nozzle_temperature", "hot_plate_temp", "textured_plate_temp", "curr_bed_type",
-            "chamber_temperatures", "sparse_infill_density", "wall_loops", "enable_support", "brim_type")},
+        "settings": {k: used.get(k) for k in SHOWN_SETTINGS},
     }

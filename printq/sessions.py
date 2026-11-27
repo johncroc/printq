@@ -71,7 +71,7 @@ def open_(job_id: str) -> str | None:
     written must not stop a print."""
     try:
         t, st = jobs.ticket(job_id), jobs.state(job_id)
-        if t.get("kind", "print") != "print":
+        if t.get("kind", "print") == "macro":
             return None
         report = st.get("slice_report") or {}
         settings = report.get("settings") or {}
