@@ -43,12 +43,17 @@ The job number is assigned at submit, not when the blank ticket is handed out, s
 | `model` | yes | STL, 3MF or STEP. Its SHA-256 is recorded at submit; if the file changes afterwards the job refuses to slice |
 | `presets` | yes | A preset set: a directory holding `machine.json`, `process.json`, `filament.json`. Relative names resolve against the printer's `presets_root` |
 | `material` | no | Checked against the filament preset, and against the loaded spool before starting |
+| `filament` | no | The exact filament, as Spoolman knows it: `{"id": 12, "label": "Maker ASA Black"}`. The job waits until a spool of it is loaded, and the queue groups jobs by it to save spool changes (see [the print desk](desk.md)) |
 | `copies` | no | Number of copies to arrange on the plate (default 1) |
 | `overrides` | no | OrcaSlicer settings to change for this job only. Keys are Orca's own setting names |
 | `expect` | no | Settings that must have these values in the sliced G-code, without changing anything. Use it to pin what matters about the preset set |
 | `notes` | no | Free text for the agent: what to tell the operator, what is unusual |
 
 `printq check ticket.json` validates a ticket without queueing it. A field that is not in this table is an error, so a misspelt optional field cannot be dropped silently.
+
+## Jobs that are already sliced
+
+A ticket with `"kind": "gcode"` prints a G-code file as it is: `file` (the path) in place of `model` and `presets`, with `title`, `printer`, `material`, `filament` and `notes` as for a print. `printq blank printer-1 --gcode` gives the blank ticket. This is what the slicer's Print button produces through [the print desk](desk.md). The file is hashed at submit and checked, not sliced: it must carry the slicer's estimate, and its printer model and material must fit the printer and the ticket.
 
 ## Macro jobs
 

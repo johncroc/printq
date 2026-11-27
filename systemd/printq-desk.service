@@ -1,0 +1,12 @@
+[Unit]
+Description=printq print desk (drop, export and slicer intake page)
+After=network-online.target
+
+[Service]
+ExecStart=%h/printq/.venv/bin/printq desk
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -76,6 +76,7 @@ cp config/env.example ~/.config/printq/env && chmod 600 ~/.config/printq/env   #
 |---|---|
 | [Architecture](docs/architecture.md) | Components, the job state machine, the two agent phases, what each tool refuses |
 | [Tickets and presets](docs/tickets.md) | The handoff format, overrides, verification, building a preset set |
+| [The print desk](docs/desk.md) | The page where dropped, exported and slicer-sent files become jobs; filament grouping and the spool wait |
 | [Bed check](docs/bed-check.md) | The three verdicts, the raise-and-look procedure and its limits, judges |
 | [Operations](docs/operations.md) | Install, configuration, Telegram, commands, commissioning, troubleshooting |
 | [Handoff from a design session](docs/handoff.md) | How an assistant submits a job, with a ready-made Claude Code skill |
