@@ -40,7 +40,10 @@ def _norm(value) -> str:
     """One comparable string for a preset value and for its CONFIG_BLOCK text."""
     if isinstance(value, list):
         value = ",".join(str(v) for v in value)
-    return str(value).strip().strip('"').replace(" ", "")
+    # The G-code's config block writes a line break inside a value (start and
+    # end G-code) as the two characters backslash-n; a ticket holds a real one.
+    text = str(value).replace("\\n", "\n")
+    return text.strip().strip('"').replace(" ", "")
 
 
 def merge_overrides(presets: Path, overrides: dict, workdir: Path) -> dict[str, Path]:
